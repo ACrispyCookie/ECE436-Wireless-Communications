@@ -1,0 +1,18 @@
+# Build outputs
+*.o
+*.ko
+*.mod.c
+*.cmd
+.tmp_versions/
+Module.symvers
+modules.order
+
+# Experiment outputs
+results/
+*.pcap
+*.log
+*.iperf_server.txt
+*.iperf_client.txt
+
+# Editor/OS
+*~
