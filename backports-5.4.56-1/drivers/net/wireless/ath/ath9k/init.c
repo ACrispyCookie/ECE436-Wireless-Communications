@@ -80,10 +80,17 @@ int ath9k_use_msi;
 module_param_named(use_msi, ath9k_use_msi, int, 0444);
 MODULE_PARM_DESC(use_msi, "Use MSI instead of INTx if possible");
 
-bool disable_backoff = false; // TODO - not implemented yet
+bool disable_backoff = false;
+EXPORT_SYMBOL(disable_backoff);
 module_param(disable_backoff, bool, 0644);
 MODULE_PARM_DESC(disable_backoff,
          "disable backoff (or so we think) the reg (AR_D_GBL_IFS_MISC_IGNORE_BACKOFF)");
+
+bool chanel_idle = false;
+EXPORT_SYMBOL(chanel_idle);
+module_param(chanel_idle, bool, 0644);
+MODULE_PARM_DESC(chanel_idle,
+         "makes the chanel appear idle, the reg (AR_DIAG_FORCE_CH_IDLE_HIGH)");
 
 
 //----------------------DECEPTIVE MODE----------------------------

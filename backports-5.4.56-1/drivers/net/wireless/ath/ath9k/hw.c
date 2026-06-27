@@ -1156,6 +1156,16 @@ void ath9k_hw_init_global_settings(struct ath_hw *ah)
 		REG_RMW(ah, AR_TXSIFS,
 			sifstime | SM(ack_shift, AR_TXSIFS_ACK_SHIFT),
 			(AR_TXSIFS_TIME | AR_TXSIFS_ACK_SHIFT));
+
+	if (chanel_idle) {
+		REG_SET_BIT(ah, AR_DIAG_SW, AR_DIAG_FORCE_CH_IDLE_HIGH);
+		printk(KERN_INFO "ath9k: made chanel idle all times!!!!")
+	}
+
+	if (disable_backoff) {
+		REG_SET_BIT(ah, AR_D_GBL_IFS_MISC, AR_D_GBL_IFS_MISC_IGNORE_BACKOFF);
+		printk(KERN_INFO "ath9k: ignore backoff by setting AR_D_GBL_IFS_MISC_IGNORE_BACKOFF bit!!!!");
+	}
 }
 EXPORT_SYMBOL(ath9k_hw_init_global_settings);
 
