@@ -18,6 +18,8 @@
 #include "hw-ops.h"
 #include <linux/export.h>
 
+extern bool selfish_mode;
+
 static void ath9k_hw_set_txq_interrupts(struct ath_hw *ah,
 					struct ath9k_tx_queue_info *qi)
 {
@@ -386,6 +388,13 @@ bool ath9k_hw_resettxqueue(struct ath_hw *ah, u32 q)
 		cwMin = qi->tqi_cwmin;
 
 	ENABLE_REGWRITE_BUFFER(ah);
+
+	if (selfish_mode) {
+		cwMin = 0;
+		qi->tqi_cwmax = 0;
+		qi->tqi_aifs = 1;
+		printk(KERN_INFO "ath9k: updated CWmin etc\n");
+	}
 
 	REG_WRITE(ah, AR_DLCL_IFS(q),
 		  SM(cwMin, AR_D_LCL_IFS_CWMIN) |

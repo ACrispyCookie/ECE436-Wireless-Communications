@@ -80,6 +80,40 @@ int ath9k_use_msi;
 module_param_named(use_msi, ath9k_use_msi, int, 0444);
 MODULE_PARM_DESC(use_msi, "Use MSI instead of INTx if possible");
 
+//----------------------SELFISH MODE----------------------------
+bool selfish_mode = false;
+module_param(selfish_mode, bool, 0644);
+MODULE_PARM_DESC(selfish_mode,
+         "Disable CSMA/CA: CW=0, AIFS=1, ignore CCA (not yet)");
+
+
+bool disable_backoff = false; // TODO - not implemented yet
+module_param(disable_backoff, bool, 0644);
+MODULE_PARM_DESC(disable_backoff,
+         "disable backoff (or so we think) the reg (AR_D_GBL_IFS_MISC_IGNORE_BACKOFF)");
+
+
+//----------------------DECEPTIVE MODE----------------------------
+bool deceptive_mode = false; // TODO - not implemented yet
+module_param(deceptive_mode, bool, 0644);
+MODULE_PARM_DESC(deceptive_mode,
+         "inject valid beacons, infinite APs, APs for evryone!!!");
+
+
+//----------------------REACTIVE MODE----------------------------
+bool reactive_mode = false; // TODO - not implemented yet
+module_param(reactive_mode, bool, 0644);
+MODULE_PARM_DESC(reactive_mode,
+         "detect ACK e.g. and then jam");
+
+
+//----------------------FOLLOW ON MODE----------------------------
+bool follow_on_mode = false; // TODO - not implemented yet
+module_param(follow_on_mode, bool, 0644);
+MODULE_PARM_DESC(follow_on_mode,
+         "track active channels and follow traffic");
+
+
 bool is_ath9k_unloaded;
 
 #ifdef CPTCFG_MAC80211_LEDS
