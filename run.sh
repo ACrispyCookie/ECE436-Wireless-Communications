@@ -306,11 +306,23 @@ log='$NODE_LOG_DIR/setup/${node}_backports_build_$(ts).log'
   echo '[build] make -j'\"\$(nproc)\"
   make -j\"\$(nproc)\"
   echo '[build] make install'
+  set +e
   make install
+  install_rc=\$?
+  set -e
+  echo '[build] make install rc='\"\$install_rc\"
   echo '[build] depmod -a'
-  depmod -a
+  depmod -a || true
   echo '[build] installed module info/params:'
   modinfo ath9k_hw 2>/dev/null | grep -E '^(filename|version|parm):' || true
+  if [[ \"\$install_rc\" -ne 0 ]]; then
+    if modinfo ath9k_hw 2>/dev/null | grep -q 'disable_backoff'; then
+      echo '[build] WARNING: make install returned non-zero, but patched ath9k_hw params are visible; continuing'
+    else
+      echo '[build] ERROR: make install returned non-zero and patched ath9k_hw params are not visible' >&2
+      exit \"\$install_rc\"
+    fi
+  fi
 } 2>&1 | tee \"\$log\"
 "
 }
@@ -329,6 +341,7 @@ load_driver_on_node() {
   node_bash "$node" "
 set -euo pipefail
 mkdir -p '$NODE_LOG_DIR/setup'
+dmesg_start=\$(dmesg 2>/dev/null | wc -l || echo 0)
 killall hostapd 2>/dev/null || true
 ip link set wlan0 down 2>/dev/null || true
 modprobe -r ath9k ath9k_common ath9k_hw ath mac80211 cfg80211 2>/dev/null || true
@@ -339,7 +352,8 @@ modprobe ath9k
   echo 'modprobe ath9k_hw $opts; modprobe ath9k'
   lsmod | grep ath9k || true
   for p in /sys/module/ath9k_hw/parameters/*; do [[ -f \"\$p\" ]] && echo \"\$(basename \"\$p\")=\$(cat \"\$p\")\"; done
-  dmesg | grep -i 'ath9k\|selfish\|backoff\|force' | tail -80 || true
+  echo '[dmesg] new ath9k-related lines from this load only:'
+  dmesg 2>/dev/null | tail -n +\$((dmesg_start + 1)) | grep -i 'ath9k\|selfish\|backoff\|force' || true
 } | tee '$NODE_LOG_DIR/setup/${node}_load_driver_$(join_opts_tag "$opts").log'
 "
 }
@@ -838,9 +852,10 @@ test_menu() {
     echo "===="
     echo "1) unfair node only"
     echo "2) fair node only"
-    echo "3) only fair nodes"
-    echo "4) TCP: AP + fair/unfair STAs"
-    echo "5) wifi with less speed: 802.11g"
+    echo "3) UDP: AP + fair/unfair STAs simultaneous"
+    echo "4) only fair nodes"
+    echo "5) TCP: AP + fair/unfair STAs"
+    echo "6) wifi with less speed: 802.11g"
     echo "b) back"
     read -r -p "Select: " c
     case "$c" in
@@ -863,10 +878,12 @@ test_menu() {
         fi
         run_action "fair node only" run_single_sta_sweep "fair" "udp" "$rates" "$duration" "$prefix"; pause;;
       3)
-        run_action "only fair nodes" run_dual_test_with_plan "only_fair_nodes" "udp" "selfish_mode=0 disable_backoff=0 chanel_idle=0" "selfish_mode=0 disable_backoff=0 chanel_idle=0" "n"; pause;;
+        run_action "UDP fair/unfair simultaneous" run_dual_test_with_plan "fair_unfair_udp" "udp" "$FAIR_DRIVER_OPTS" "$UNFAIR_DRIVER_OPTS" "n"; pause;;
       4)
-        run_action "TCP fair/unfair" run_dual_test_with_plan "tcp" "tcp" "$FAIR_DRIVER_OPTS" "$UNFAIR_DRIVER_OPTS" "n"; pause;;
+        run_action "only fair nodes" run_dual_test_with_plan "only_fair_nodes" "udp" "selfish_mode=0 disable_backoff=0 chanel_idle=0" "selfish_mode=0 disable_backoff=0 chanel_idle=0" "n"; pause;;
       5)
+        run_action "TCP fair/unfair" run_dual_test_with_plan "tcp" "tcp" "$FAIR_DRIVER_OPTS" "$UNFAIR_DRIVER_OPTS" "n"; pause;;
+      6)
         run_action "802.11g lower-speed wifi" run_dual_test_with_plan "wifi_11g" "udp" "$FAIR_DRIVER_OPTS" "$UNFAIR_DRIVER_OPTS" "g"; pause;;
       b|B) return 0;;
       *) echo "Unknown option"; sleep 1;;
