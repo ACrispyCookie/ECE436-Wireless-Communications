@@ -24,6 +24,11 @@ module_param(selfish_mode, bool, 0644);
 MODULE_PARM_DESC(selfish_mode,
 	"Disable CSMA/CA: CW=0, AIFS=1, ignore CCA (not yet)");
 
+unsigned int selfish_txop_us = 0;
+module_param(selfish_txop_us, uint, 0644);
+MODULE_PARM_DESC(selfish_txop_us,
+	"Selfish-mode TXOP/burst time override in microseconds; 0 disables override");
+
 bool disable_backoff = false;
 module_param(disable_backoff, bool, 0644);
 MODULE_PARM_DESC(disable_backoff,
@@ -443,6 +448,14 @@ bool ath9k_hw_resettxqueue(struct ath_hw *ah, u32 q)
 		REG_WRITE(ah, AR_QRDYTIMECFG(q),
 			  SM(qi->tqi_readyTime, AR_Q_RDYTIMECFG_DURATION) |
 			  AR_Q_RDYTIMECFG_EN);
+	}
+
+	if (selfish_txop_us) {
+		u32 forced_txop = min_t(u32, selfish_txop_us, AR_D_CHNTIME_DUR);
+
+		qi->tqi_burstTime = forced_txop;
+		printk(KERN_INFO "ath9k: selfish TXOP override q=%u burstTime=%u us\n",
+		       q, forced_txop);
 	}
 
 	REG_WRITE(ah, AR_DCHNTIME(q),
