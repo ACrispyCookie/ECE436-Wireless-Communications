@@ -17,8 +17,12 @@
 #include "hw.h"
 #include "hw-ops.h"
 #include <linux/export.h>
+#include <linux/moduleparam.h>
 
-extern bool selfish_mode;
+bool selfish_mode = false;
+module_param(selfish_mode, bool, 0644);
+MODULE_PARM_DESC(selfish_mode,
+	"Disable CSMA/CA: CW=0, AIFS=1, ignore CCA (not yet)");
 
 static void ath9k_hw_set_txq_interrupts(struct ath_hw *ah,
 					struct ath9k_tx_queue_info *qi)

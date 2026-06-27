@@ -80,13 +80,6 @@ int ath9k_use_msi;
 module_param_named(use_msi, ath9k_use_msi, int, 0444);
 MODULE_PARM_DESC(use_msi, "Use MSI instead of INTx if possible");
 
-//----------------------SELFISH MODE----------------------------
-bool selfish_mode = false;
-module_param(selfish_mode, bool, 0644);
-MODULE_PARM_DESC(selfish_mode,
-         "Disable CSMA/CA: CW=0, AIFS=1, ignore CCA (not yet)");
-
-
 bool disable_backoff = false; // TODO - not implemented yet
 module_param(disable_backoff, bool, 0644);
 MODULE_PARM_DESC(disable_backoff,

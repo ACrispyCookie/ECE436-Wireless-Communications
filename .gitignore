@@ -13,6 +13,8 @@ results/
 *.log
 *.iperf_server.txt
 *.iperf_client.txt
+*.tar.gz
+*.pid
 
 # Editor/OS
 *~
