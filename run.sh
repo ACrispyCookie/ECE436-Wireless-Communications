@@ -25,9 +25,9 @@ PATCH_FILE="${PATCH_FILE:-$SCRIPT_DIR/ath9k_experiment.patch}"
 SRC_REPO="${SRC_REPO:-$SCRIPT_DIR}"
 BASE_REF="${BASE_REF:-origin/baseline}"
 
-AP_NODE="${AP_NODE:-node069}"
-FAIR_NODE="${FAIR_NODE:-node084}"
-UNFAIR_NODE="${UNFAIR_NODE:-node088}"
+AP_NODE="${AP_NODE:-}"
+FAIR_NODE="${FAIR_NODE:-}"
+UNFAIR_NODE="${UNFAIR_NODE:-}"
 AP_IP="${AP_IP:-192.168.2.1}"
 FAIR_IP="${FAIR_IP:-192.168.2.2}"
 UNFAIR_IP="${UNFAIR_IP:-192.168.2.3}"
@@ -50,7 +50,29 @@ TCP_PORT_BASE="${TCP_PORT_BASE:-5010}"
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no)
 
 # ---------- Small helpers ----------
-all_nodes_csv() { printf '%s,%s,%s' "$AP_NODE" "$FAIR_NODE" "$UNFAIR_NODE"; }
+require_nodes_config() {
+  local missing=() k
+  for k in AP_NODE FAIR_NODE UNFAIR_NODE; do
+    [[ -n "${!k:-}" ]] || missing+=("$k")
+  done
+  if (( ${#missing[@]} )); then
+    echo "Missing node configuration: ${missing[*]}" >&2
+    echo "Load an experiment .conf first, for example: ./run.sh load-config experiment.conf" >&2
+    echo "Or use the interactive menu: Setup -> 7) load settings from config" >&2
+    return 1
+  fi
+}
+
+all_nodes_csv() {
+  require_nodes_config || return 1
+  printf '%s,%s,%s' "$AP_NODE" "$FAIR_NODE" "$UNFAIR_NODE"
+}
+
+all_nodes_csv_or_empty() {
+  if [[ -n "${AP_NODE:-}" && -n "${FAIR_NODE:-}" && -n "${UNFAIR_NODE:-}" ]]; then
+    printf '%s,%s,%s' "$AP_NODE" "$FAIR_NODE" "$UNFAIR_NODE"
+  fi
+}
 split_csv() { tr ',' ' ' <<<"$1"; }
 ts() { date +%Y%m%d_%H%M%S; }
 safe() { sed 's/[^A-Za-z0-9_.-]/_/g' <<<"$1"; }
@@ -139,9 +161,9 @@ Local results dir: $LOCAL_RESULTS_DIR
 Patch file:        $PATCH_FILE
 Source repo:       $SRC_REPO
 Base ref:          $BASE_REF
-AP:                $AP_NODE ($AP_IP)
-Fair STA:          $FAIR_NODE ($FAIR_IP)
-Unfair STA:        $UNFAIR_NODE ($UNFAIR_IP)
+AP:                ${AP_NODE:-<unset>} ($AP_IP)
+Fair STA:          ${FAIR_NODE:-<unset>} ($FAIR_IP)
+Unfair STA:        ${UNFAIR_NODE:-<unset>} ($UNFAIR_IP)
 SSID/channel:      $SSID / $CHANNEL
 Default rates:     $RATES
 Duration:          ${DURATION}s
@@ -235,7 +257,8 @@ generate_patch() {
 }
 
 load_image_to_nodes() {
-  local nodes="${1:-$(all_nodes_csv)}"
+  local nodes="${1:-}"
+  if [[ -z "$nodes" ]]; then nodes="$(all_nodes_csv)" || return 1; fi
   echo "[omf] image=$IMAGE nodes=$nodes"
   if [[ -n "$SLICE_NAME" ]]; then echo "[omf] slice=$SLICE_NAME"; fi
   echo "Do not interrupt OMF load after it starts."
@@ -328,7 +351,8 @@ log='$NODE_LOG_DIR/setup/${node}_backports_build_$(ts).log'
 }
 
 deploy_patch_and_build_nodes() {
-  local nodes="${1:-$(all_nodes_csv)}" patch_file="${2:-$PATCH_FILE}" n
+  local nodes="${1:-}" patch_file="${2:-$PATCH_FILE}" n
+  if [[ -z "$nodes" ]]; then nodes="$(all_nodes_csv)" || return 1; fi
   for n in $(split_csv "$nodes"); do
     apply_patch_on_node "$n" "$patch_file" || return 1
     build_driver_on_node "$n" || return 1
@@ -359,6 +383,7 @@ modprobe ath9k
 }
 
 start_ap() {
+  require_nodes_config || return 1
   local mode="${1:-n}" # n or g
   local ieee80211n=1 hw_mode=g
   if [[ "$mode" == "g" ]]; then ieee80211n=0; hw_mode=g; fi
@@ -391,6 +416,7 @@ tail -40 '$NODE_LOG_DIR/setup/${AP_NODE}_hostapd_${mode}.log' || true
 }
 
 connect_sta() {
+  require_nodes_config || return 1
   local node="$1" ip="$2"
   node_bash "$node" "
 set -euo pipefail
@@ -410,6 +436,7 @@ sleep 3
 }
 
 prepare_topology() {
+  require_nodes_config || return 1
   local unfair_opts="$1" fair_opts="$2" mode="${3:-n}"
   load_driver_on_node "$AP_NODE" "selfish_mode=0 disable_backoff=0 chanel_idle=0" || return 1
   load_driver_on_node "$FAIR_NODE" "$fair_opts" || return 1
@@ -464,6 +491,7 @@ fi
 }
 
 run_two_sta_once() {
+  require_nodes_config || return 1
   local proto="$1" fair_rate="$2" unfair_rate="$3" duration="$4" label="$5"
   iperf_server "$AP_NODE" "$proto" "$FAIR_PORT" "$label" || return 1
   iperf_server "$AP_NODE" "$proto" "$UNFAIR_PORT" "$label" || return 1
@@ -479,6 +507,7 @@ run_two_sta_once() {
 }
 
 run_single_sta_sweep() {
+  require_nodes_config || return 1
   local which="$1" proto="$2" rates="$3" duration="$4" prefix="$5"
   local node ip port tag rate label
   if [[ "$which" == "fair" ]]; then node="$FAIR_NODE"; port="$FAIR_PORT"; tag="fair"; else node="$UNFAIR_NODE"; port="$UNFAIR_PORT"; tag="unfair"; fi
@@ -563,7 +592,8 @@ run_dual_test_with_plan() {
 
 # ---------- Results ----------
 fetch_results() {
-  local out="${1:-$LOCAL_RESULTS_DIR/collected_$(ts)}" nodes="${2:-$(all_nodes_csv)}"
+  local out="${1:-$LOCAL_RESULTS_DIR/collected_$(ts)}" nodes="${2:-}"
+  if [[ -z "$nodes" ]]; then nodes="$(all_nodes_csv)" || return 1; fi
   mkdir -p "$out"
   local stamp n
   stamp="$(ts)"
@@ -757,7 +787,8 @@ PY
 }
 
 status_nodes() {
-  local nodes="${1:-$(all_nodes_csv)}" n
+  local nodes="${1:-}" n
+  if [[ -z "$nodes" ]]; then nodes="$(all_nodes_csv)" || return 1; fi
   for n in $(split_csv "$nodes"); do
     echo "===== $n ====="
     node_bash "$n" "
@@ -794,9 +825,9 @@ setup_menu() {
       1) local p; p=$(prompt_default "Patch filename" "$PATCH_FILE"); run_action "generate patch" generate_patch "$p"; pause;;
       2) AP_NODE=$(prompt_default "AP node" "$AP_NODE"); FAIR_NODE=$(prompt_default "Fair STA node" "$FAIR_NODE"); UNFAIR_NODE=$(prompt_default "Unfair STA node" "$UNFAIR_NODE"); AP_IP=$(prompt_default "AP IP" "$AP_IP"); FAIR_IP=$(prompt_default "Fair STA IP" "$FAIR_IP"); UNFAIR_IP=$(prompt_default "Unfair STA IP" "$UNFAIR_IP");;
       3) RATES=$(prompt_default "Rates comma-separated" "$RATES"); DURATION=$(prompt_default "Duration seconds" "$DURATION"); FIXED_RATE_DEFAULT=$(prompt_default "Default fixed rate" "$FIXED_RATE_DEFAULT");;
-      4) local nodes; nodes=$(prompt_default "Nodes comma-separated" "$(all_nodes_csv)"); run_action "load image" load_image_to_nodes "$nodes"; pause;;
+      4) local nodes; nodes=$(prompt_default "Nodes comma-separated" "$(all_nodes_csv_or_empty)"); run_action "load image" load_image_to_nodes "$nodes"; pause;;
       5) local node; node=$(prompt_default "Single node to image" "$UNFAIR_NODE"); run_action "load image on one node: $node" load_image_to_nodes "$node"; pause;;
-      6) local nodes p; nodes=$(prompt_default "Nodes comma-separated" "$(all_nodes_csv)"); p=$(prompt_default "Patch file" "$PATCH_FILE"); run_action "send patch + build/install" deploy_patch_and_build_nodes "$nodes" "$p"; pause;;
+      6) local nodes p; nodes=$(prompt_default "Nodes comma-separated" "$(all_nodes_csv_or_empty)"); p=$(prompt_default "Patch file" "$PATCH_FILE"); run_action "send patch + build/install" deploy_patch_and_build_nodes "$nodes" "$p"; pause;;
       7) local f; f=$(prompt_default "Config file to load" "$SCRIPT_DIR/experiment.conf"); load_config "$f"; pause;;
       8) local f; f=$(prompt_default "Config file to write" "$SCRIPT_DIR/experiment.conf"); export_config "$f"; pause;;
       9) GATEWAY=$(prompt_default "Gateway" "$GATEWAY"); SLICE_NAME=$(prompt_default "Slice name" "$SLICE_NAME"); IMAGE=$(prompt_default "Image" "$IMAGE"); BACKPORTS_DIR=$(prompt_default "Backports dir on nodes" "$BACKPORTS_DIR"); NODE_LOG_DIR=$(prompt_default "Node log dir" "$NODE_LOG_DIR"); LOCAL_RESULTS_DIR=$(prompt_default "Local results dir" "$LOCAL_RESULTS_DIR"); SSID=$(prompt_default "SSID" "$SSID"); CHANNEL=$(prompt_default "Channel" "$CHANNEL"); SRC_REPO=$(prompt_default "Source repo" "$SRC_REPO"); BASE_REF=$(prompt_default "Base git ref" "$BASE_REF");;
@@ -838,7 +869,7 @@ driver_options_menu() {
       8) FAIR_DRIVER_OPTS="selfish_mode=0 disable_backoff=0 chanel_idle=0"; UNFAIR_DRIVER_OPTS="selfish_mode=1 disable_backoff=0 chanel_idle=1"; echo "Preset applied."; sleep 1;;
       9) FAIR_DRIVER_OPTS="selfish_mode=0 disable_backoff=0 chanel_idle=0"; UNFAIR_DRIVER_OPTS="selfish_mode=1 disable_backoff=1 chanel_idle=1"; echo "Preset applied."; sleep 1;;
       10) run_action "load drivers" prepare_topology "$UNFAIR_DRIVER_OPTS" "$FAIR_DRIVER_OPTS" "n"; pause;;
-      11) run_action "status" status_nodes "$(all_nodes_csv)"; pause;;
+      11) run_action "status" status_nodes "$(all_nodes_csv_or_empty)"; pause;;
       b|B) return 0;;
       *) echo "Unknown option"; sleep 1;;
     esac
@@ -903,7 +934,7 @@ results_menu() {
     echo "b) back"
     read -r -p "Select: " c
     case "$c" in
-      1) local out nodes; out=$(prompt_default "Local output dir" "$LOCAL_RESULTS_DIR/collected_$(ts)"); nodes=$(prompt_default "Nodes comma-separated" "$(all_nodes_csv)"); run_action "fetch results" fetch_results "$out" "$nodes"; pause;;
+      1) local out nodes; out=$(prompt_default "Local output dir" "$LOCAL_RESULTS_DIR/collected_$(ts)"); nodes=$(prompt_default "Nodes comma-separated" "$(all_nodes_csv_or_empty)"); run_action "fetch results" fetch_results "$out" "$nodes"; pause;;
       2) local dir csv; dir=$(prompt_default "Collected log dir" "$LOCAL_RESULTS_DIR"); csv=$(prompt_default "CSV output" "$dir/iperf_summary.csv"); run_action "parse results" parse_results "$dir" "$csv"; pause;;
       3) local dir csv out; dir=$(prompt_default "Collected log dir" "$LOCAL_RESULTS_DIR"); csv=$(prompt_default "CSV file" "$dir/iperf_summary.csv"); out=$(prompt_default "Plot output dir" "$dir/plots"); run_action "plot results" plot_results "$dir" "$csv" "$out"; pause;;
       4) local dir csv out; dir=$(prompt_default "Collected log dir" "$LOCAL_RESULTS_DIR"); csv=$(prompt_default "CSV output" "$dir/iperf_summary.csv"); out=$(prompt_default "Plot output dir" "$dir/plots"); run_action "parse results" parse_results "$dir" "$csv"; run_action "plot results" plot_results "$dir" "$csv" "$out"; pause;;
@@ -967,11 +998,11 @@ case "$cmd" in
   generate-patch) generate_patch "${1:-$PATCH_FILE}";;
   load-config) load_config "${1:?config file required}";;
   export-config) export_config "${1:?config file required}";;
-  deploy-driver) deploy_patch_and_build_nodes "${1:-$(all_nodes_csv)}" "${2:-$PATCH_FILE}";;
-  fetch-results) fetch_results "${1:-$LOCAL_RESULTS_DIR/collected_$(ts)}" "${2:-$(all_nodes_csv)}";;
+  deploy-driver) deploy_patch_and_build_nodes "${1:-}" "${2:-$PATCH_FILE}";;
+  fetch-results) fetch_results "${1:-$LOCAL_RESULTS_DIR/collected_$(ts)}" "${2:-}";;
   parse-results) parse_results "${1:?log dir required}" "${2:-${1:?}/iperf_summary.csv}";;
   plot-results) plot_results "${1:?log dir required}" "${2:-${1:?}/iperf_summary.csv}" "${3:-${1:?}/plots}";;
-  status) status_nodes "${1:-$(all_nodes_csv)}";;
+  status) status_nodes "${1:-}";;
   -h|--help|help) usage;;
   *) echo "Unknown command: $cmd" >&2; usage; exit 1;;
 esac
