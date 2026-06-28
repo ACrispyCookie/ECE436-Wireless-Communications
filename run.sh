@@ -46,8 +46,8 @@ CHANNEL_SWITCH_DELAY_SECONDS="${CHANNEL_SWITCH_DELAY_SECONDS:-30}"
 CHANNEL_SWITCH_CHANNEL="${CHANNEL_SWITCH_CHANNEL:-6}"
 AP2_FOLLOW_ENABLED="${AP2_FOLLOW_ENABLED:-0}"
 AP2_FOLLOW_PORT="${AP2_FOLLOW_PORT:-4444}"
-AP2_FOLLOW_CHANNELS="${AP2_FOLLOW_CHANNELS:-1-11}"
-AP2_FOLLOW_DWELL_SECONDS="${AP2_FOLLOW_DWELL_SECONDS:-0.35}"
+AP2_FOLLOW_CHANNELS="${AP2_FOLLOW_CHANNELS:-$CHANNEL}"  # fixed channel for CSA/SCA listener (kept name for config compatibility)
+AP2_FOLLOW_DWELL_SECONDS="${AP2_FOLLOW_DWELL_SECONDS:-0.35}"  # legacy; no longer used by fixed-channel CSA listener
 AP2_FOLLOW_TARGET_SSID="${AP2_FOLLOW_TARGET_SSID:-$SSID}"
 AP2_FOLLOW_IGNORE_SSID="${AP2_FOLLOW_IGNORE_SSID:-$AP2_SSID}"
 
@@ -288,7 +288,7 @@ Channel:           $CHANNEL
 Default rates:     $RATES
 Duration:          ${DURATION}s
 CSA switch:        enabled=$CHANNEL_SWITCH_ENABLED delay=${CHANNEL_SWITCH_DELAY_SECONDS}s channel=$CHANNEL_SWITCH_CHANNEL
-AP2 follow:        enabled=$AP2_FOLLOW_ENABLED port=$AP2_FOLLOW_PORT channels=$AP2_FOLLOW_CHANNELS dwell=${AP2_FOLLOW_DWELL_SECONDS}s target_ssid=$AP2_FOLLOW_TARGET_SSID ignore_ssid=$AP2_FOLLOW_IGNORE_SSID
+AP2 follow:        enabled=$AP2_FOLLOW_ENABLED port=$AP2_FOLLOW_PORT listen_channel=$AP2_FOLLOW_CHANNELS target_ssid=$AP2_FOLLOW_TARGET_SSID ignore_ssid=$AP2_FOLLOW_IGNORE_SSID
 Fair driver opts:  ${FAIR_DRIVER_OPTS:-<none>}
 Unfair drv opts:   ${UNFAIR_DRIVER_OPTS:-<none>}
 EOF
@@ -777,7 +777,15 @@ if [[ -f '$NODE_LOG_DIR/ap2_channel_switch_server.pid' ]]; then
   old_pid=\$(cat '$NODE_LOG_DIR/ap2_channel_switch_server.pid' 2>/dev/null || true)
   [[ -n \"\${old_pid:-}\" ]] && kill \"\$old_pid\" 2>/dev/null || true
 fi
-nohup python3 /root/ap_channel_switch_server.py --bind 0.0.0.0 --port '$AP2_FOLLOW_PORT' --iface wlan0 \
+{
+  echo '[ap2-follow-debug] AP2 state before listener start'
+  date -Is
+  iw dev || true
+  iw dev wlan0 info || true
+  hostapd_cli -p /var/run/hostapd -i wlan0 status || true
+  ss -lunp 2>/dev/null | grep ':$AP2_FOLLOW_PORT' || true
+} > '$NODE_LOG_DIR/$label/${AP2_NODE}_ap2_follow_state_before.log' 2>&1
+nohup python3 -u /root/ap_channel_switch_server.py --bind 0.0.0.0 --port '$AP2_FOLLOW_PORT' --iface wlan0 \
   > '$NODE_LOG_DIR/$label/${AP2_NODE}_ap2_channel_switch_server.log' 2>&1 & echo \$! > '$NODE_LOG_DIR/ap2_channel_switch_server.pid'
 sleep 1
 cat '$NODE_LOG_DIR/ap2_channel_switch_server.pid'
@@ -799,18 +807,31 @@ else
   iw dev wlan0 interface add mon1 type monitor
 fi
 ip link set mon1 up 2>/dev/null || ifconfig mon1 up
+{
+  echo '[ap2-follow-debug] unfair state before hunter start'
+  date -Is
+  iw dev || true
+  iw dev wlan0 link || true
+  iw dev wlan0 info || true
+  iw dev mon1 info || true
+  ip addr show wlan0 || true
+  ip addr show mon1 || true
+  ping -c 2 -W 1 '$AP2_IP' || true
+} > '$NODE_LOG_DIR/$label/${UNFAIR_NODE}_ap2_follow_state_before.log' 2>&1
 if [[ -f '$NODE_LOG_DIR/unfair_beacon_channel_hunter.pid' ]]; then
   old_pid=\$(cat '$NODE_LOG_DIR/unfair_beacon_channel_hunter.pid' 2>/dev/null || true)
   [[ -n \"\${old_pid:-}\" ]] && kill \"\$old_pid\" 2>/dev/null || true
 fi
-nohup python3 /root/unfair_beacon_channel_hunter.py \
+nohup python3 -u /root/unfair_beacon_channel_hunter.py \
   --monitor-iface mon1 \
+  --listen-channel '$AP2_FOLLOW_CHANNELS' \
+  --no-set-channel \
   --ap-control-ip '$AP2_IP' \
   --ap-control-port '$AP2_FOLLOW_PORT' \
-  --channels '$AP2_FOLLOW_CHANNELS' \
-  --dwell-seconds '$AP2_FOLLOW_DWELL_SECONDS' \
   --target-ssid '$AP2_FOLLOW_TARGET_SSID' \
   --ignore-ssid '$AP2_FOLLOW_IGNORE_SSID' \
+  --stats-interval 5 \
+  --target-beacon-samples 20 \
   > '$NODE_LOG_DIR/$label/${UNFAIR_NODE}_unfair_beacon_channel_hunter.log' 2>&1 & echo \$! > '$NODE_LOG_DIR/unfair_beacon_channel_hunter.pid'
 sleep 1
 cat '$NODE_LOG_DIR/unfair_beacon_channel_hunter.pid'
@@ -975,9 +996,13 @@ run_two_ap_experiment() {
   if prompt_yes_no "Enable AP2/unfair auto-follow with UDP + Scapy beacon hunter?" "$(bool_default_letter "$AP2_FOLLOW_ENABLED")"; then
     ap2_follow_enabled=1
     AP2_FOLLOW_PORT=$(prompt_default "AP2 follow UDP port" "$AP2_FOLLOW_PORT")
-    AP2_FOLLOW_CHANNELS=$(prompt_default "Unfair hunter channel sweep list" "$AP2_FOLLOW_CHANNELS")
-    AP2_FOLLOW_DWELL_SECONDS=$(prompt_default "Unfair hunter dwell seconds per channel (>0.1)" "$AP2_FOLLOW_DWELL_SECONDS")
-    AP2_FOLLOW_TARGET_SSID=$(prompt_default "Beacon target SSID to follow" "$AP2_FOLLOW_TARGET_SSID")
+    if ! [[ "$AP2_FOLLOW_CHANNELS" =~ ^[0-9]+$ ]]; then AP2_FOLLOW_CHANNELS="$CHANNEL"; fi
+    AP2_FOLLOW_CHANNELS=$(prompt_default "Unfair CSA listener fixed channel (initial AP1/AP2 channel)" "$AP2_FOLLOW_CHANNELS")
+    if ! [[ "$AP2_FOLLOW_CHANNELS" =~ ^[0-9]+$ ]] || (( AP2_FOLLOW_CHANNELS < 1 || AP2_FOLLOW_CHANNELS > 14 )); then
+      echo "Invalid AP2 follow listen channel: $AP2_FOLLOW_CHANNELS (use a fixed 2.4GHz channel 1-14, not a sweep list)" >&2
+      return 1
+    fi
+    AP2_FOLLOW_TARGET_SSID=$(prompt_default "CSA beacon target SSID to follow" "$AP2_FOLLOW_TARGET_SSID")
     AP2_FOLLOW_IGNORE_SSID=$(prompt_default "SSID to ignore (usually AP2 own SSID)" "$AP2_FOLLOW_IGNORE_SSID")
   fi
   AP2_FOLLOW_ENABLED="$ap2_follow_enabled"
@@ -1642,6 +1667,44 @@ dmesg | grep -i 'ath9k\|selfish\|txop\|backoff\|force\|reset' | tail -80
   done
 }
 
+clear_node_logs() {
+  local nodes="${1:-}" remote_dir="${2:-$NODE_LOG_DIR}" n
+  [[ -n "$nodes" ]] || { nodes="$(all_nodes_csv)" || return 1; }
+  [[ -n "$remote_dir" && "$remote_dir" == /* && "$remote_dir" != "/" ]] || {
+    echo "Refusing unsafe remote log dir: $remote_dir" >&2
+    return 1
+  }
+  for n in $(split_csv "$nodes"); do
+    [[ -n "$n" ]] || continue
+    echo "===== clearing logs on $n:$remote_dir ====="
+    node_bash "$n" "
+set -euo pipefail
+remote_dir='$remote_dir'
+if [[ -z \"\$remote_dir\" || \"\$remote_dir\" != /* || \"\$remote_dir\" == / ]]; then
+  echo \"Refusing unsafe remote log dir: \$remote_dir\" >&2
+  exit 1
+fi
+mkdir -p \"\$remote_dir\"
+echo \"[before]\"
+find \"\$remote_dir\" -mindepth 1 -maxdepth 2 -print 2>/dev/null | sed -n '1,80p' || true
+find \"\$remote_dir\" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+echo \"[after]\"
+find \"\$remote_dir\" -mindepth 1 -maxdepth 1 -print 2>/dev/null || true
+"
+  done
+}
+
+clear_node_logs_prompt() {
+  local nodes dir
+  nodes=$(prompt_default "Nodes to clear logs from (comma-separated)" "$(all_nodes_csv_or_empty)")
+  dir=$(prompt_default "Remote log directory to clear" "$NODE_LOG_DIR")
+  if prompt_yes_no "Delete all contents under '$dir' on nodes: $nodes ?" "n"; then
+    run_action "clear node logs" clear_node_logs "$nodes" "$dir"
+  else
+    echo "Cancelled."
+  fi
+}
+
 # ---------- Menus ----------
 setup_menu() {
   while true; do
@@ -1730,6 +1793,7 @@ results_menu() {
     echo "3) plot results"
     echo "4) parse + plot results"
     echo "5) dry-run with dummy nodes/logs"
+    echo "6) clear logs from nodes"
     echo "b) back"
     read -r -p "Select: " c
     case "$c" in
@@ -1738,6 +1802,7 @@ results_menu() {
       3) local dir csv out; dir=$(prompt_default "Experiment/collection log dir" "$LOCAL_RESULTS_DIR"); csv=$(prompt_default "CSV file (used only for a single experiment dir)" "$dir/summary.csv"); out=$(prompt_default "Plot output root" "$PLOTS_DIR"); run_action "plot results" plot_results_auto "$dir" "$csv" "$out"; pause;;
       4) local dir csv out; dir=$(prompt_default "Experiment log dir" "$LOCAL_RESULTS_DIR"); csv=$(prompt_default "CSV output" "$dir/summary.csv"); out=$(prompt_default "Plot output dir" "$PLOTS_DIR/$(basename "$dir")"); run_action "parse results" parse_results "$dir" "$csv"; run_action "plot results" plot_results "$dir" "$csv" "$out"; pause;;
       5) local out; out=$(prompt_default "Dry-run collected output dir" "$LOCAL_RESULTS_DIR/collected_$(ts)_dryrun"); run_action "dry-run dummy results" dry_run_results "$out"; pause;;
+      6) clear_node_logs_prompt; pause;;
       b|B) return 0;;
       *) echo "Unknown option"; sleep 1;;
     esac
@@ -1783,6 +1848,7 @@ Usage:
   ./run.sh parse-results experiment_dir [csv]
   ./run.sh plot-results experiment_dir [csv] [plot_dir]
   ./run.sh dry-run [out_dir]
+  ./run.sh clear-node-logs [nodes_csv] [remote_log_dir]
   ./run.sh status [nodes_csv]
 
 The interactive menu has tabs:
@@ -1804,6 +1870,7 @@ case "$cmd" in
   parse-results) parse_results "${1:?experiment dir required}" "${2:-${1:?}/summary.csv}";;
   plot-results) plot_results_auto "${1:?experiment dir required}" "${2:-${1:?}/summary.csv}" "${3:-$PLOTS_DIR}";;
   dry-run|dryrun) dry_run_results "${1:-$LOCAL_RESULTS_DIR/collected_$(ts)_dryrun}";;
+  clear-node-logs|clear-logs) clear_node_logs "${1:-}" "${2:-$NODE_LOG_DIR}";;
   status) status_nodes "${1:-}";;
   -h|--help|help) usage;;
   *) echo "Unknown command: $cmd" >&2; usage; exit 1;;

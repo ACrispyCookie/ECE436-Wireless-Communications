@@ -26,6 +26,10 @@ def now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
+def log(msg: str, err: bool = False) -> None:
+    print("[%s] %s" % (now(), msg), file=(sys.stderr if err else sys.stdout), flush=True)
+
+
 def channel_to_freq_mhz(value: int) -> int:
     """Accept 2.4GHz channel 1-14 or an already-specified MHz frequency."""
     if value > 1000:
@@ -56,6 +60,20 @@ def parse_request(data):
     if obj.get("type", "channel_switch") != "channel_switch":
         raise ValueError(f"unsupported message type: {obj.get('type')!r}")
     if "channel" not in obj:
+        # Accept direct CSA/SCA-shaped payloads too: {"new_channel":6},
+        # {"target_channel":6}, or {"csa":{"channel":6,"ext_channel":6}}.
+        csa_raw = obj.get("csa")
+        csa_obj = csa_raw if isinstance(csa_raw, dict) else {}
+        for key in ("new_channel", "target_channel"):
+            if key in obj:
+                obj["channel"] = obj[key]
+                break
+        else:
+            for key in ("channel", "ext_channel"):
+                if key in csa_obj and csa_obj[key] is not None:
+                    obj["channel"] = csa_obj[key]
+                    break
+    if "channel" not in obj:
         raise ValueError("missing channel field")
     obj["channel"] = int(obj["channel"])
     return obj
@@ -82,12 +100,12 @@ class ChannelSwitchServer:
             self.last_channel == channel_or_freq
             and now_ts - self.last_switch_time < self.args.min_switch_interval
         ):
-            print(f"[{now()}] suppress duplicate switch to {channel_or_freq}; min interval not elapsed")
+            log(f"suppress duplicate switch to {channel_or_freq}; min interval not elapsed")
             return True
 
         if self.args.dry_run:
-            print(
-                f"[{now()}] DRY-RUN would run: "
+            log(
+                f"DRY-RUN would run: "
                 f"hostapd_cli -p {self.args.ctrl_path} -i {self.args.iface} chan_switch {self.args.csa_count} {freq}"
             )
             self.last_channel = channel_or_freq
@@ -95,11 +113,11 @@ class ChannelSwitchServer:
             return True
 
         before = self.hostapd_cli("status")
-        print(f"[{now()}] hostapd status before switch rc={before.returncode}\n{before.stdout.strip()}")
+        log(f"hostapd status before switch rc={before.returncode}\n{before.stdout.strip()}")
 
         result = self.hostapd_cli("chan_switch", str(self.args.csa_count), str(freq))
-        print(
-            f"[{now()}] chan_switch request channel={channel_or_freq} freq={freq} "
+        log(
+            f"chan_switch request channel={channel_or_freq} freq={freq} "
             f"rc={result.returncode}\n{result.stdout.strip()}"
         )
         if result.returncode != 0 or "FAIL" in result.stdout:
@@ -107,7 +125,7 @@ class ChannelSwitchServer:
 
         time.sleep(self.args.post_switch_sleep)
         after = self.hostapd_cli("status")
-        print(f"[{now()}] hostapd status after switch rc={after.returncode}\n{after.stdout.strip()}")
+        log(f"hostapd status after switch rc={after.returncode}\n{after.stdout.strip()}")
 
         self.last_channel = channel_or_freq
         self.last_switch_time = now_ts
@@ -119,24 +137,26 @@ class ChannelSwitchServer:
             if self.args.token and req.get("token") != self.args.token:
                 raise ValueError("bad or missing token")
             channel = int(req["channel"])
-            print(f"[{now()}] request from {addr[0]}:{addr[1]}: {req}")
+            log(f"request from {addr[0]}:{addr[1]} bytes={len(data)}: {req}")
             ok = self.switch_channel(channel)
-            print(f"[{now()}] request result: {'OK' if ok else 'FAILED'}")
+            log(f"request result: {'OK' if ok else 'FAILED'}")
         except Exception as exc:  # keep server alive for bad packets
-            print(f"[{now()}] WARN: ignoring packet from {addr[0]}:{addr[1]}: {exc}", file=sys.stderr)
+            log(f"WARN: ignoring packet from {addr[0]}:{addr[1]}: {exc}", err=True)
 
     def run(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((self.args.bind, self.args.port))
-        print(f"[{now()}] AP channel-switch server listening on {self.args.bind}:{self.args.port}")
-        print(f"[{now()}] iface={self.args.iface} ctrl_path={self.args.ctrl_path} csa_count={self.args.csa_count}")
+        log(f"AP channel-switch server listening on {self.args.bind}:{self.args.port}")
+        log(f"iface={self.args.iface} ctrl_path={self.args.ctrl_path} csa_count={self.args.csa_count}")
+        status = self.hostapd_cli("status")
+        log(f"initial hostapd status rc={status.returncode}\n{status.stdout.strip()}")
         try:
             while True:
                 data, addr = sock.recvfrom(4096)
                 self.handle_packet(data, addr)
         except KeyboardInterrupt:
-            print(f"\n[{now()}] stopping AP channel-switch server")
+            log("stopping AP channel-switch server")
             return 0
 
 
