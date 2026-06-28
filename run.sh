@@ -281,17 +281,19 @@ config_keys=(
   FAIR_DRIVER_OPTS UNFAIR_DRIVER_OPTS FAIR_PORT UNFAIR_PORT TCP_PORT_BASE
 )
 
+config_content() {
+  echo "# ECE436 ath9k experiment-suite config"
+  echo "# Generated: $(date -Is)"
+  local k
+  for k in "${config_keys[@]}"; do
+    printf '%s=%q\n' "$k" "${!k}"
+  done
+}
+
 export_config() {
   local file="$1"
   mkdir -p "$(dirname "$file")"
-  {
-    echo "# ECE436 ath9k experiment-suite config"
-    echo "# Generated: $(date -Is)"
-    local k
-    for k in "${config_keys[@]}"; do
-      printf '%s=%q\n' "$k" "${!k}"
-    done
-  } > "$file"
+  config_content > "$file"
   echo "Wrote config: $file"
 }
 
@@ -557,6 +559,37 @@ sleep 3
 "
 }
 
+snapshot_experiment_state() {
+  local prefix="$1" nodes="$2" conf_b64 n opts_tag baseline_opts
+  baseline_opts="selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0"
+  conf_b64="$(config_content | base64 -w0)"
+  for n in $(split_csv "$nodes"); do
+    [[ -n "$n" ]] || continue
+    if [[ "$n" == "$FAIR_NODE" ]]; then
+      opts_tag="$(join_opts_tag "$FAIR_DRIVER_OPTS")"
+    elif [[ "$n" == "$UNFAIR_NODE" ]]; then
+      opts_tag="$(join_opts_tag "$UNFAIR_DRIVER_OPTS")"
+    else
+      opts_tag="$(join_opts_tag "$baseline_opts")"
+    fi
+    node_bash "$n" "
+set -euo pipefail
+exp_dir='$NODE_LOG_DIR/$prefix'
+setup_src='$NODE_LOG_DIR/setup'
+setup_dst=\"\$exp_dir/setup\"
+mkdir -p \"\$setup_dst\"
+printf '%s' '$conf_b64' | base64 -d > \"\$exp_dir/experiment.conf\"
+copy_if_exists() { [[ -e \"\$1\" ]] && cp -a \"\$1\" \"\$setup_dst/\" || true; }
+latest_backports=\$(ls -t \"\$setup_src\"/${n}_backports_build_*.log 2>/dev/null | head -n 1 || true)
+[[ -n \"\$latest_backports\" ]] && copy_if_exists \"\$latest_backports\"
+copy_if_exists \"\$setup_src/${n}_load_driver_${opts_tag}.log\"
+for f in \"\$setup_src\"/${n}_hostapd*.log \"\$setup_src\"/${n}_hostapd.pid \"\$setup_src\"/${n}_connect_*.log; do
+  copy_if_exists \"\$f\"
+done
+"
+  done
+}
+
 prepare_topology() {
   require_nodes_config || return 1
   local unfair_opts="$1" fair_opts="$2" mode="${3:-n}"
@@ -712,15 +745,18 @@ run_single_sta_sweep() {
 }
 
 run_single_sta_experiment() {
-  local which="$1" proto wifi_mode rates duration prefix
+  local which="$1" proto wifi_mode rates duration prefix nodes
   proto=$(prompt_protocol)
   wifi_mode=$(prompt_wifi_mode)
   rates=$(prompt_default "Rates comma-separated" "$RATES")
   duration=$(prompt_default "Duration seconds per rate" "$DURATION")
+  RATES="$rates"; DURATION="$duration"
   prefix=$(prompt_default "Log prefix" "${which}_only_${proto}_11${wifi_mode}_$(ts)")
   if prompt_yes_no "Prepare topology/load drivers before test?" "y"; then
     prepare_single_topology "$which" "$wifi_mode" || return 1
   fi
+  if [[ "$which" == "fair" ]]; then nodes="$AP_NODE,$FAIR_NODE"; else nodes="$AP_NODE,$UNFAIR_NODE"; fi
+  snapshot_experiment_state "$prefix" "$nodes" || return 1
   run_single_sta_sweep "$which" "$proto" "$rates" "$duration" "$prefix"
 }
 
@@ -775,14 +811,21 @@ run_dual_plan() {
   local duration prefix plan mode fixed_node fixed_rate sweep_rates rate fair_rate unfair_rate label fair_lead_seconds
   duration=$(prompt_default "Duration seconds per run" "$DURATION")
   fair_lead_seconds=$(prompt_default "Seconds to start fair STA before unfair STA" "$DUAL_FAIR_LEAD_SECONDS")
+  DURATION="$duration"; DUAL_FAIR_LEAD_SECONDS="$fair_lead_seconds"
   if ! [[ "$fair_lead_seconds" =~ ^[0-9]+$ ]]; then
     echo "Invalid fair lead delay: $fair_lead_seconds (must be non-negative integer seconds)" >&2
     return 1
   fi
   prefix=$(prompt_default "Log prefix" "${test_name}_$(ts)")
   IFS='|' read -r mode fixed_node fixed_rate sweep_rates <<<"$(ask_fixed_rate_plan)"
+  [[ -n "$sweep_rates" ]] && RATES="$sweep_rates"
   if prompt_yes_no "Prepare topology/load drivers before test?" "y"; then
     "$topology_fn" "$unfair_opts" "$fair_opts" "$wifi_mode" || return 1
+  fi
+  if [[ "$topology_fn" == "prepare_two_ap_topology" ]]; then
+    snapshot_experiment_state "$prefix" "$AP_NODE,$AP2_NODE,$FAIR_NODE,$UNFAIR_NODE" || return 1
+  else
+    snapshot_experiment_state "$prefix" "$AP_NODE,$FAIR_NODE,$UNFAIR_NODE" || return 1
   fi
   # Keep driver options out of log paths. The collected experiment.conf records
   # FAIR_DRIVER_OPTS/UNFAIR_DRIVER_OPTS for the whole experiment.
@@ -891,9 +934,14 @@ for node_dir in sorted([p for p in raw.iterdir() if p.is_dir()]):
         node_experiments.add(exp); experiments.add(exp)
     if not node_experiments:
         node_experiments.add(f"collected_{fetch_stamp}"); experiments.update(node_experiments)
-    setup=node_dir/'setup'
-    if setup.exists():
-        for exp in node_experiments:
+    for exp in node_experiments:
+        exp_src=node_dir/exp
+        conf=exp_src/'experiment.conf'
+        if conf.exists() and not (out/exp/'experiment.conf').exists():
+            (out/exp).mkdir(parents=True, exist_ok=True)
+            shutil.copy2(conf, out/exp/'experiment.conf')
+        setup=exp_src/'setup'
+        if setup.exists():
             dest=out/exp/role_dir/'setup'
             dest.mkdir(parents=True, exist_ok=True)
             for item in setup.iterdir():
@@ -961,7 +1009,9 @@ fi
   local exp
   for exp in "$out"/*; do
     [[ -d "$exp" ]] || continue
-    export_config "$exp/experiment.conf"
+    if [[ ! -f "$exp/experiment.conf" ]]; then
+      export_config "$exp/experiment.conf"
+    fi
     parse_results "$exp" "$exp/summary.csv"
     plot_results "$exp" "$exp/summary.csv" "$PLOTS_DIR/$(basename "$exp")"
   done
@@ -985,7 +1035,30 @@ def pair_from_rel(rel):
     m=re.search(r'unfair_([^_/]+)_fair_([^_/]+)', text)
     if m: return m.group(1), m.group(2)
     return '', ''
-rows=[]
+
+def run_stamp_from_name(name):
+    m=re.search(r'(20\d{6}_\d{6})', name)
+    return m.group(1) if m else ''
+
+def parse_log_start_time(lines):
+    # iperf_client() writes `date` before the command, e.g.
+    # `Sun Jun 28 14:19:41 EEST 2026`.  Ignore timezone name because Python
+    # does not reliably know EEST in all environments; all node logs use the
+    # same local wall clock for one run.
+    months={'Jan':1,'Feb':2,'Mar':3,'Apr':4,'May':5,'Jun':6,'Jul':7,'Aug':8,'Sep':9,'Oct':10,'Nov':11,'Dec':12}
+    for ln in lines[:8]:
+        parts=ln.split()
+        if len(parts) >= 6 and parts[1] in months and re.match(r'\d{1,2}:\d{2}:\d{2}$', parts[3]):
+            try:
+                import datetime as _dt
+                hh,mm,ss=map(int, parts[3].split(':'))
+                return _dt.datetime(int(parts[5]), months[parts[1]], int(parts[2]), hh, mm, ss)
+            except Exception:
+                return None
+    return None
+
+file_infos=[]
+client_starts={}
 for f in sorted(indir.rglob('*.log')):
     if not f.is_file() or 'setup' in f.parts:
         continue
@@ -1015,19 +1088,44 @@ for f in sorted(indir.rglob('*.log')):
     if not offered_rate:
         cm=re.match(r'([^_]+)_20\d{6}_\d{6}\.log$', name)
         if cm and node.startswith(('fair_','unfair_')): offered_rate=cm.group(1)
-    for idx,(ln,m) in enumerate(matches):
+    run_stamp=run_stamp_from_name(name)
+    start_time=parse_log_start_time(lines) if role == 'client' else None
+    file_infos.append({
+        'matches': matches, 'rel': rel, 'node': node, 'label': label, 'role': role, 'proto': proto, 'port': port,
+        'fair_rate': fair_rate, 'unfair_rate': unfair_rate, 'offered_rate': offered_rate, 'duration': duration,
+        'server_ip': server_ip, 'run_stamp': run_stamp, 'start_time': start_time,
+    })
+    if role == 'client' and port and run_stamp and start_time is not None:
+        client_starts[(run_stamp, port)] = start_time
+
+min_start_by_run={}
+for (run_stamp, _port), start_time in client_starts.items():
+    cur=min_start_by_run.get(run_stamp)
+    if cur is None or start_time < cur:
+        min_start_by_run[run_stamp] = start_time
+
+rows=[]
+for info in file_infos:
+    start_time = info['start_time']
+    if start_time is None and info['port'] and info['run_stamp']:
+        start_time = client_starts.get((info['run_stamp'], info['port']))
+    start_offset=''
+    if start_time is not None and info['run_stamp'] in min_start_by_run:
+        start_offset = f"{(start_time - min_start_by_run[info['run_stamp']]).total_seconds():.3f}"
+    for idx,(ln,m) in enumerate(info['matches']):
         rows.append({
-            'label': label, 'node': node, 'role': role, 'proto': proto, 'port': port,
-            'fair_rate': fair_rate, 'unfair_rate': unfair_rate,
-            'offered_rate': offered_rate, 'duration_s': duration, 'server_ip': server_ip,
-            'interval_s': m.group('interval').replace(' ', ''), 'is_final': '1' if idx == len(matches)-1 else '0',
+            'label': info['label'], 'node': info['node'], 'role': info['role'], 'proto': info['proto'], 'port': info['port'],
+            'fair_rate': info['fair_rate'], 'unfair_rate': info['unfair_rate'],
+            'offered_rate': info['offered_rate'], 'duration_s': info['duration'], 'server_ip': info['server_ip'],
+            'run_stamp': info['run_stamp'], 'start_offset_s': start_offset,
+            'interval_s': m.group('interval').replace(' ', ''), 'is_final': '1' if idx == len(info['matches'])-1 else '0',
             'transfer': m.group('transfer'), 'transfer_unit': m.group('transfer_unit'),
             'bandwidth': m.group('bw'), 'bandwidth_unit': m.group('bw_unit'),
             'jitter_ms': m.group('jitter') or '', 'lost': m.group('lost') or '', 'total': m.group('total') or '', 'loss_pct': m.group('loss_pct') or '',
-            'source_file': str(rel), 'summary_line': ln,
+            'source_file': str(info['rel']), 'summary_line': ln,
         })
 out.parent.mkdir(parents=True, exist_ok=True)
-fields=['label','node','role','proto','port','fair_rate','unfair_rate','offered_rate','duration_s','server_ip','interval_s','is_final','transfer','transfer_unit','bandwidth','bandwidth_unit','jitter_ms','lost','total','loss_pct','source_file','summary_line']
+fields=['label','node','role','proto','port','fair_rate','unfair_rate','offered_rate','duration_s','server_ip','run_stamp','start_offset_s','interval_s','is_final','transfer','transfer_unit','bandwidth','bandwidth_unit','jitter_ms','lost','total','loss_pct','source_file','summary_line']
 with out.open('w', newline='') as fh:
     w=csv.DictWriter(fh, fieldnames=fields); w.writeheader(); w.writerows(rows)
 print(f'Wrote {len(rows)} rows to {out}')
@@ -1036,7 +1134,8 @@ for r in rows:
     if r['role']=='server' and r['is_final']=='1':
         loss = f" loss={r['lost']}/{r['total']} ({r['loss_pct']}%)" if r['lost'] else ''
         pair = f" unfair={r['unfair_rate']} fair={r['fair_rate']}" if r['unfair_rate'] or r['fair_rate'] else ''
-        print(f"{r['label']}{pair} {r['node']} {r['proto']} port={r['port']} bw={r['bandwidth']} {r['bandwidth_unit']}{loss}")
+        offset = f" start_offset={r['start_offset_s']}s" if r.get('start_offset_s') else ''
+        print(f"{r['label']}{pair} {r['node']} {r['proto']} port={r['port']}{offset} bw={r['bandwidth']} {r['bandwidth_unit']}{loss}")
 PY
 }
 
@@ -1056,6 +1155,55 @@ try:
 except Exception:
     plt = None
 
+def write_basic_png(path, title, label_series):
+    # Pure-stdlib fallback for environments without matplotlib.  It keeps the
+    # same PNG filename and draws the actual time-shifted series instead of a
+    # placeholder, so old PNGs are not left stale.
+    import struct, zlib
+    W,H=1000,500; L,R,T,B=70,30,35,55
+    img=bytearray([255]*(W*H*3))
+    def pix(x,y,c):
+        if 0 <= x < W and 0 <= y < H:
+            i=(y*W+x)*3; img[i:i+3]=bytes(c)
+    def line(x0,y0,x1,y1,c):
+        x0=int(round(x0)); y0=int(round(y0)); x1=int(round(x1)); y1=int(round(y1))
+        dx=abs(x1-x0); sx=1 if x0<x1 else -1; dy=-abs(y1-y0); sy=1 if y0<y1 else -1; err=dx+dy
+        while True:
+            for ox in (-1,0,1):
+                for oy in (-1,0,1): pix(x0+ox,y0+oy,c)
+            if x0==x1 and y0==y1: break
+            e2=2*err
+            if e2>=dy: err+=dy; x0+=sx
+            if e2<=dx: err+=dx; y0+=sy
+    def rect(x0,y0,x1,y1,c):
+        for y in range(max(0,int(y0)), min(H,int(y1)+1)):
+            for x in range(max(0,int(x0)), min(W,int(x1)+1)): pix(x,y,c)
+    allpts=[p for _name,pts in label_series for p in pts]
+    if not allpts: return
+    xmax=max(1.0, max(x for x,_ in allpts)); ymax=max(1.0, max(y for _,y in allpts))*1.10
+    def sx(x): return L + (W-L-R)*x/xmax
+    def sy(y): return H-B - (H-T-B)*y/ymax
+    # grid + axes
+    for k in range(6):
+        x=L+(W-L-R)*k/5; line(x,T,x,H-B,(230,230,230))
+        y=T+(H-T-B)*k/5; line(L,y,W-R,y,(230,230,230))
+    line(L,T,L,H-B,(0,0,0)); line(L,H-B,W-R,H-B,(0,0,0))
+    colors=[(31,119,180),(214,39,40),(44,160,44),(148,103,189)]
+    for idx,(name,pts) in enumerate(label_series):
+        c=colors[idx%len(colors)]
+        last=None
+        for x,y in pts:
+            px,py=sx(x),sy(y)
+            if last: line(last[0],last[1],px,py,c)
+            rect(px-3,py-3,px+3,py+3,c)
+            last=(px,py)
+        # small color-box legend (text is available in matplotlib path only)
+        rect(W-R-150, T+idx*18, W-R-135, T+idx*18+10, c)
+    raw=b''.join(b'\x00'+bytes(img[y*W*3:(y+1)*W*3]) for y in range(H))
+    def chunk(t,d): return struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)
+    png=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',W,H,8,2,0,0,0))+chunk(b'IDAT',zlib.compress(raw,9))+chunk(b'IEND',b'')
+    path.write_bytes(png)
+
 def bw_mbps(v,u):
     x=float(v)
     if u.startswith('K'): return x/1000.0
@@ -1065,6 +1213,12 @@ def bw_mbps(v,u):
 def start_s(interval):
     m=re.match(r'([0-9.]+)-', interval or '')
     return float(m.group(1)) if m else 0.0
+
+def row_offset_s(r):
+    try:
+        return float(r.get('start_offset_s') or 0.0)
+    except Exception:
+        return 0.0
 
 def safe(s): return re.sub(r'[^A-Za-z0-9_.-]+','_',str(s)).strip('_') or 'unknown'
 rows=list(csv.DictReader(csv_path.open()))
@@ -1078,7 +1232,7 @@ for r in rows:
     except Exception: continue
     port=r.get('port','')
     name='fair_STA' if port == fair_port else 'unfair_STA' if port == unfair_port else f"server_port_{port}"
-    series[(unfair, fair, name)].append((start_s(r['interval_s']), y))
+    series[(unfair, fair, name)].append((start_s(r['interval_s']) + row_offset_s(r), y))
 pairs=sorted(set((u,f) for u,f,_ in series))
 made=0
 for unfair, fair in pairs:
@@ -1090,8 +1244,7 @@ for unfair, fair in pairs:
     title=f"unfair {unfair} / fair {fair}"
     path=outdir/f"unfair_{unfair}_fair_{fair}.png"
     if plt is None:
-        path=path.with_suffix('.svg')
-        path.write_text(f"<svg xmlns='http://www.w3.org/2000/svg' width='800' height='120'><text x='20' y='60'>{title}: matplotlib unavailable</text></svg>\n")
+        write_basic_png(path, title, label_series)
     else:
         plt.figure(figsize=(10,5))
         for name,pts in label_series:
@@ -1141,8 +1294,9 @@ def client_log(server_ip, port, rate, mbps, seconds=6):
 
 pairs=[('25M','5M'), ('25M','10M'), ('50M','10M')]
 for node in (ap, fair, unfair):
-    setup=raw/node/'setup'
+    setup=raw/node/exp/'setup'
     setup.mkdir(parents=True, exist_ok=True)
+    (raw/node/exp/'experiment.conf').write_text(f'# dry-run config snapshot for {exp}\nAP_NODE={ap}\nFAIR_NODE={fair}\nUNFAIR_NODE={unfair}\n')
     (setup/f'{node}_dryrun_setup.log').write_text(f'dummy setup for {node}\n')
 for idx,(unfair_rate,fair_rate) in enumerate(pairs):
     run_stamp=f"{stamp}_{idx+1:02d}"
@@ -1163,7 +1317,9 @@ PY
   organize_collected_results "$out" "$raw" "$stamp"
   rm -rf "$raw"
   local exp_dir="$out/$exp"
-  export_config "$exp_dir/experiment.conf"
+  if [[ ! -f "$exp_dir/experiment.conf" ]]; then
+    export_config "$exp_dir/experiment.conf"
+  fi
   parse_results "$exp_dir" "$exp_dir/summary.csv"
   plot_results "$exp_dir" "$exp_dir/summary.csv" "$PLOTS_DIR/$exp"
   echo "Dry-run results under: $exp_dir"
