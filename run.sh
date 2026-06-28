@@ -186,6 +186,24 @@ prompt_choice() {
   done
 }
 
+prompt_protocol() {
+  local choice
+  choice=$(prompt_choice "Protocol:" "UDP" "TCP")
+  case "$choice" in
+    1) printf 'udp' ;;
+    2) printf 'tcp' ;;
+  esac
+}
+
+prompt_wifi_mode() {
+  local choice
+  choice=$(prompt_choice "802.11 version:" "802.11n" "802.11g")
+  case "$choice" in
+    1) printf 'n' ;;
+    2) printf 'g' ;;
+  esac
+}
+
 pause() { read -r -p "Press Enter to continue..." _ || true; }
 
 soft_clear() {
@@ -531,6 +549,27 @@ prepare_topology() {
   connect_sta "$UNFAIR_NODE" "$UNFAIR_IP" || return 1
 }
 
+prepare_single_topology() {
+  require_nodes_config || return 1
+  local which="$1" sta_node sta_ip sta_opts mode="${2:-n}"
+  case "$which" in
+    fair)
+      sta_node="$FAIR_NODE"; sta_ip="$FAIR_IP"; sta_opts="$FAIR_DRIVER_OPTS"
+      ;;
+    unfair)
+      sta_node="$UNFAIR_NODE"; sta_ip="$UNFAIR_IP"; sta_opts="$UNFAIR_DRIVER_OPTS"
+      ;;
+    *)
+      echo "Unknown STA role: $which" >&2
+      return 1
+      ;;
+  esac
+  load_driver_on_node "$AP_NODE" "selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0" || return 1
+  load_driver_on_node "$sta_node" "$sta_opts" || return 1
+  start_ap "$mode" || return 1
+  connect_sta "$sta_node" "$sta_ip" || return 1
+}
+
 iperf_server() {
   local node="$1" proto="$2" port="$3" label="$4"
   local udpflag="-u"; [[ "$proto" == "tcp" ]] && udpflag=""
@@ -607,11 +646,24 @@ run_single_sta_sweep() {
   local node ip port tag rate label
   if [[ "$which" == "fair" ]]; then node="$FAIR_NODE"; port="$FAIR_PORT"; tag="fair"; else node="$UNFAIR_NODE"; port="$UNFAIR_PORT"; tag="unfair"; fi
   for rate in $(split_csv "$rates"); do
-    label="${prefix}_${tag}_only_rate_$(rate_tag "$rate")"
+    label="${prefix}/${tag}_$(rate_tag "$rate")_$(ts)_proto_${proto}"
     iperf_server "$AP_NODE" "$proto" "$port" "$label" || return 1
     sleep 2
     iperf_client "$node" "$proto" "$AP_IP" "$rate" "$duration" "$port" "$label" "$tag" || return 1
   done
+}
+
+run_single_sta_experiment() {
+  local which="$1" proto wifi_mode rates duration prefix
+  proto=$(prompt_protocol)
+  wifi_mode=$(prompt_wifi_mode)
+  rates=$(prompt_default "Rates comma-separated" "$RATES")
+  duration=$(prompt_default "Duration seconds per rate" "$DURATION")
+  prefix=$(prompt_default "Log prefix" "${which}_only_${proto}_11${wifi_mode}_$(ts)")
+  if prompt_yes_no "Prepare topology/load drivers before test?" "y"; then
+    prepare_single_topology "$which" "$wifi_mode" || return 1
+  fi
+  run_single_sta_sweep "$which" "$proto" "$rates" "$duration" "$prefix"
 }
 
 ask_fixed_rate_plan() {
@@ -644,6 +696,13 @@ ask_fixed_rate_plan() {
       printf 'both|both|%s,%s|%s\n' "$fair_fixed" "$unfair_fixed" "single"
       ;;
   esac
+}
+
+run_dual_sta_experiment() {
+  local proto wifi_mode
+  proto=$(prompt_protocol)
+  wifi_mode=$(prompt_wifi_mode)
+  run_dual_test_with_plan "fair_unfair_${proto}_11${wifi_mode}" "$proto" "$FAIR_DRIVER_OPTS" "$UNFAIR_DRIVER_OPTS" "$wifi_mode"
 }
 
 run_dual_test_with_plan() {
@@ -1132,41 +1191,15 @@ test_menu() {
     soft_clear
     echo "Test"
     echo "===="
-    echo "1) unfair node only"
-    echo "2) fair node only"
-    echo "3) UDP: AP + fair/unfair STAs simultaneous"
-    echo "4) only fair nodes"
-    echo "5) TCP: AP + fair/unfair STAs"
-    echo "6) wifi with less speed: 802.11g"
+    echo "1) fair node only"
+    echo "2) unfair node only"
+    echo "3) fair + unfair nodes"
     echo "b) back"
     read -r -p "Select: " c
     case "$c" in
-      1)
-        local rates duration prefix
-        rates=$(prompt_default "Rates comma-separated" "$RATES")
-        duration=$(prompt_default "Duration seconds per rate" "$DURATION")
-        prefix=$(prompt_default "Log prefix" "unfair_only_$(ts)_unfair_$(join_opts_tag "$UNFAIR_DRIVER_OPTS")")
-        if prompt_yes_no "Prepare AP + unfair STA before test?" "y"; then
-          load_driver_on_node "$AP_NODE" "selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0" && load_driver_on_node "$UNFAIR_NODE" "$UNFAIR_DRIVER_OPTS" && start_ap "n" && connect_sta "$UNFAIR_NODE" "$UNFAIR_IP"
-        fi
-        run_action "unfair node only" run_single_sta_sweep "unfair" "udp" "$rates" "$duration" "$prefix"; pause;;
-      2)
-        local rates duration prefix
-        rates=$(prompt_default "Rates comma-separated" "$RATES")
-        duration=$(prompt_default "Duration seconds per rate" "$DURATION")
-        prefix=$(prompt_default "Log prefix" "fair_only_$(ts)_fair_$(join_opts_tag "$FAIR_DRIVER_OPTS")")
-        if prompt_yes_no "Prepare AP + fair STA before test?" "y"; then
-          load_driver_on_node "$AP_NODE" "selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0" && load_driver_on_node "$FAIR_NODE" "$FAIR_DRIVER_OPTS" && start_ap "n" && connect_sta "$FAIR_NODE" "$FAIR_IP"
-        fi
-        run_action "fair node only" run_single_sta_sweep "fair" "udp" "$rates" "$duration" "$prefix"; pause;;
-      3)
-        run_action "UDP fair/unfair simultaneous" run_dual_test_with_plan "fair_unfair_udp" "udp" "$FAIR_DRIVER_OPTS" "$UNFAIR_DRIVER_OPTS" "n"; pause;;
-      4)
-        run_action "only fair nodes" run_dual_test_with_plan "only_fair_nodes" "udp" "selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0" "selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0" "n"; pause;;
-      5)
-        run_action "TCP fair/unfair" run_dual_test_with_plan "tcp" "tcp" "$FAIR_DRIVER_OPTS" "$UNFAIR_DRIVER_OPTS" "n"; pause;;
-      6)
-        run_action "802.11g lower-speed wifi" run_dual_test_with_plan "wifi_11g" "udp" "$FAIR_DRIVER_OPTS" "$UNFAIR_DRIVER_OPTS" "g"; pause;;
+      1) run_action "fair node only" run_single_sta_experiment "fair"; pause;;
+      2) run_action "unfair node only" run_single_sta_experiment "unfair"; pause;;
+      3) run_action "fair + unfair nodes" run_dual_sta_experiment; pause;;
       b|B) return 0;;
       *) echo "Unknown option"; sleep 1;;
     esac
