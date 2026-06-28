@@ -11,6 +11,7 @@ __pycache__/
 
 # Experiment outputs
 results/
+plots/
 *.pcap
 *.log
 *.iperf_server.txt
