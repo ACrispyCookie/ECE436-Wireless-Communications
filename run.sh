@@ -15,8 +15,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---------- Persistent/default settings ----------
-GATEWAY="${GATEWAY:-dtsiantos@nitlab3.inf.uth.gr}"
-SLICE_NAME="${SLICE_NAME:-}"
+GATEWAY="${GATEWAY:-nitlab3.inf.uth.gr}"
+SLICE_NAME="${SLICE_NAME:-dtsiantos}"
 IMAGE="${IMAGE:-baseline_wireless_communications.ndz}"
 BACKPORTS_DIR="${BACKPORTS_DIR:-/root/backports-5.4.56-1}"
 NODE_LOG_DIR="${NODE_LOG_DIR:-/root/ece436_exp_logs}"
@@ -80,6 +80,33 @@ ts() { date +%Y%m%d_%H%M%S; }
 safe() { sed 's/[^A-Za-z0-9_.-]/_/g' <<<"$1"; }
 join_opts_tag() { local x="${1:-none}"; x="${x// /_}"; safe "$x"; }
 rate_tag() { safe "$1"; }
+
+script_path() {
+  local path="$1"
+  [[ -z "$path" ]] && return 0
+  if [[ "$path" == /* ]]; then
+    printf '%s' "$path"
+  else
+    printf '%s/%s' "$SCRIPT_DIR" "$path"
+  fi
+}
+
+normalize_path_settings() {
+  LOCAL_RESULTS_DIR="$(script_path "$LOCAL_RESULTS_DIR")"
+  PLOTS_DIR="$(script_path "$PLOTS_DIR")"
+  PATCH_FILE="$(script_path "$PATCH_FILE")"
+  SRC_REPO="$(script_path "$SRC_REPO")"
+}
+
+gateway_target() {
+  if [[ "$GATEWAY" == *@* || -z "${SLICE_NAME:-}" ]]; then
+    printf '%s' "$GATEWAY"
+  else
+    printf '%s@%s' "$SLICE_NAME" "$GATEWAY"
+  fi
+}
+
+normalize_path_settings
 
 get_opt_value() {
   local opts="$1" key="$2" default="${3:-0}" token
@@ -171,6 +198,7 @@ settings_summary() {
   cat <<EOF
 Gateway:           $GATEWAY
 Slice name:        ${SLICE_NAME:-<unset>}
+Gateway SSH:       $(gateway_target)
 Image:             $IMAGE
 Backports dir:     $BACKPORTS_DIR
 Node log dir:      $NODE_LOG_DIR
@@ -190,7 +218,7 @@ Unfair drv opts:   ${UNFAIR_DRIVER_OPTS:-<none>}
 EOF
 }
 
-gw() { ssh "${SSH_OPTS[@]}" "$GATEWAY" "$@"; }
+gw() { ssh "${SSH_OPTS[@]}" "$(gateway_target)" "$@"; }
 node_bash() {
   local node="$1" script="$2"
   gw "ssh -o StrictHostKeyChecking=no root@${node} 'bash -s'" <<<"$script"
@@ -254,6 +282,7 @@ load_config() {
   source "$tmp"
   rm -f "$tmp"
   normalize_driver_opts
+  normalize_path_settings
   echo "Loaded config: $file"
 }
 
@@ -289,7 +318,7 @@ load_image_to_nodes() {
   local nodes="${1:-}"
   if [[ -z "$nodes" ]]; then nodes="$(all_nodes_csv)" || return 1; fi
   echo "[omf] image=$IMAGE nodes=$nodes"
-  if [[ -n "$SLICE_NAME" ]]; then echo "[omf] slice=$SLICE_NAME"; fi
+  echo "[ssh] gateway=$(gateway_target)"
   echo "Do not interrupt OMF load after it starts."
   gw "omf load -i '$IMAGE' -t '$nodes'"
   echo "OMF command finished. Waiting for SSH readiness..."
@@ -304,9 +333,10 @@ load_image_to_nodes() {
 # ---------- Driver/network node commands ----------
 send_patch_to_node() {
   local node="$1" patch_file="${2:-$PATCH_FILE}" remote_patch="/tmp/ece436_$(basename "$patch_file")"
+  patch_file="$(script_path "$patch_file")"
   [[ -s "$patch_file" ]] || { echo "Patch file not found or empty: $patch_file" >&2; return 1; }
   echo "[patch] copy $patch_file -> $node:$remote_patch"
-  scp "${SSH_OPTS[@]}" "$patch_file" "$GATEWAY:/tmp/$(basename "$patch_file")"
+  scp "${SSH_OPTS[@]}" "$patch_file" "$(gateway_target):/tmp/$(basename "$patch_file")"
   gw "scp -o StrictHostKeyChecking=no '/tmp/$(basename "$patch_file")' root@'$node':'$remote_patch'"
 }
 
@@ -387,6 +417,7 @@ log='$NODE_LOG_DIR/setup/${node}_backports_build_$(ts).log'
 
 deploy_patch_and_build_nodes() {
   local nodes="${1:-}" patch_file="${2:-$PATCH_FILE}" n
+  patch_file="$(script_path "$patch_file")"
   if [[ -z "$nodes" ]]; then nodes="$(all_nodes_csv)" || return 1; fi
   for n in $(split_csv "$nodes"); do
     apply_patch_on_node "$n" "$patch_file" || return 1
@@ -768,6 +799,7 @@ PY
 
 fetch_results() {
   local out="${1:-$LOCAL_RESULTS_DIR/collected_$(ts)}" nodes="${2:-}"
+  out="$(script_path "$out")"
   if [[ -z "$nodes" ]]; then nodes="$(all_nodes_csv)" || return 1; fi
   mkdir -p "$out"
   local stamp n raw
@@ -786,7 +818,7 @@ else
 fi
 "
     gw "scp root@'$n':'/tmp/${n}_ece436_logs_${stamp}.tar.gz' '/tmp/${n}_ece436_logs_${stamp}.tar.gz'"
-    scp "${SSH_OPTS[@]}" "$GATEWAY:/tmp/${n}_ece436_logs_${stamp}.tar.gz" "$raw/"
+    scp "${SSH_OPTS[@]}" "$(gateway_target):/tmp/${n}_ece436_logs_${stamp}.tar.gz" "$raw/"
     mkdir -p "$raw/$n"
     tar xzf "$raw/${n}_ece436_logs_${stamp}.tar.gz" -C "$raw/$n"
   done
@@ -942,6 +974,7 @@ dry_run_results() {
   local stamp out raw exp old_ap old_fair old_unfair old_fair_port old_unfair_port
   stamp="$(ts)"
   out="${1:-$LOCAL_RESULTS_DIR/collected_${stamp}_dryrun}"
+  out="$(script_path "$out")"
   exp="dryrun_${stamp}"
   raw="$out/.raw_${stamp}"
   old_ap="$AP_NODE"; old_fair="$FAIR_NODE"; old_unfair="$UNFAIR_NODE"
@@ -1048,7 +1081,7 @@ setup_menu() {
       6) local nodes p; nodes=$(prompt_default "Nodes comma-separated" "$(all_nodes_csv_or_empty)"); p=$(prompt_default "Patch file" "$PATCH_FILE"); run_action "send patch + build/install" deploy_patch_and_build_nodes "$nodes" "$p"; pause;;
       7) local f; f=$(prompt_default "Config file to load" "$SCRIPT_DIR/experiment.conf"); load_config "$f"; pause;;
       8) local f; f=$(prompt_default "Config file to write" "$SCRIPT_DIR/experiment.conf"); export_config "$f"; pause;;
-      9) GATEWAY=$(prompt_default "Gateway" "$GATEWAY"); SLICE_NAME=$(prompt_default "Slice name" "$SLICE_NAME"); IMAGE=$(prompt_default "Image" "$IMAGE"); BACKPORTS_DIR=$(prompt_default "Backports dir on nodes" "$BACKPORTS_DIR"); NODE_LOG_DIR=$(prompt_default "Node log dir" "$NODE_LOG_DIR"); LOCAL_RESULTS_DIR=$(prompt_default "Local results dir" "$LOCAL_RESULTS_DIR"); PLOTS_DIR=$(prompt_default "Plots dir" "$PLOTS_DIR"); SSID=$(prompt_default "SSID" "$SSID"); CHANNEL=$(prompt_default "Channel" "$CHANNEL"); SRC_REPO=$(prompt_default "Source repo" "$SRC_REPO"); BASE_REF=$(prompt_default "Base git ref" "$BASE_REF");;
+      9) GATEWAY=$(prompt_default "Gateway" "$GATEWAY"); SLICE_NAME=$(prompt_default "Slice name" "$SLICE_NAME"); IMAGE=$(prompt_default "Image" "$IMAGE"); BACKPORTS_DIR=$(prompt_default "Backports dir on nodes" "$BACKPORTS_DIR"); NODE_LOG_DIR=$(prompt_default "Node log dir" "$NODE_LOG_DIR"); LOCAL_RESULTS_DIR=$(prompt_default "Local results dir" "$LOCAL_RESULTS_DIR"); PLOTS_DIR=$(prompt_default "Plots dir" "$PLOTS_DIR"); SSID=$(prompt_default "SSID" "$SSID"); CHANNEL=$(prompt_default "Channel" "$CHANNEL"); SRC_REPO=$(prompt_default "Source repo" "$SRC_REPO"); BASE_REF=$(prompt_default "Base git ref" "$BASE_REF"); normalize_path_settings;;
       b|B) return 0;;
       *) echo "Unknown option"; sleep 1;;
     esac
