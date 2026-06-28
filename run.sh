@@ -27,12 +27,15 @@ SRC_REPO="${SRC_REPO:-$SCRIPT_DIR}"
 BASE_REF="${BASE_REF:-origin/baseline}"
 
 AP_NODE="${AP_NODE:-}"
+AP2_NODE="${AP2_NODE:-}"
 FAIR_NODE="${FAIR_NODE:-}"
 UNFAIR_NODE="${UNFAIR_NODE:-}"
 AP_IP="${AP_IP:-192.168.2.1}"
+AP2_IP="${AP2_IP:-192.168.2.4}"
 FAIR_IP="${FAIR_IP:-192.168.2.2}"
 UNFAIR_IP="${UNFAIR_IP:-192.168.2.3}"
 SSID="${SSID:-tsiantos}"
+AP2_SSID="${AP2_SSID:-${SSID}_ap2}"
 CHANNEL="${CHANNEL:-7}"
 RATES="${RATES:-5M,25M,50M,150M}"
 DURATION="${DURATION:-60}"
@@ -43,7 +46,7 @@ DUAL_FAIR_LEAD_SECONDS="${DUAL_FAIR_LEAD_SECONDS:-10}"
 # explicit in labels/configs so result directories document the exact mode.
 # NOTE: "chanel_idle" intentionally preserves the driver's exported typo.
 FAIR_DRIVER_OPTS="${FAIR_DRIVER_OPTS:-selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0}"
-UNFAIR_DRIVER_OPTS="${UNFAIR_DRIVER_OPTS:-selfish_mode=1 disable_backoff=0 chanel_idle=0 selfish_txop_us=0}"
+UNFAIR_DRIVER_OPTS="${UNFAIR_DRIVER_OPTS:-selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0}"
 
 # IPERF defaults. iperf2 is assumed because NITLab images used iperf2 in previous tests.
 FAIR_PORT="${FAIR_PORT:-5004}"
@@ -65,14 +68,31 @@ require_nodes_config() {
   fi
 }
 
+require_two_ap_nodes_config() {
+  require_nodes_config || return 1
+  if [[ -z "${AP2_NODE:-}" ]]; then
+    echo "Missing node configuration: AP2_NODE" >&2
+    echo "Set AP2_NODE in experiment.conf or Setup -> 2) set default nodes." >&2
+    return 1
+  fi
+}
+
 all_nodes_csv() {
   require_nodes_config || return 1
-  printf '%s,%s,%s' "$AP_NODE" "$FAIR_NODE" "$UNFAIR_NODE"
+  if [[ -n "${AP2_NODE:-}" ]]; then
+    printf '%s,%s,%s,%s' "$AP_NODE" "$AP2_NODE" "$FAIR_NODE" "$UNFAIR_NODE"
+  else
+    printf '%s,%s,%s' "$AP_NODE" "$FAIR_NODE" "$UNFAIR_NODE"
+  fi
 }
 
 all_nodes_csv_or_empty() {
   if [[ -n "${AP_NODE:-}" && -n "${FAIR_NODE:-}" && -n "${UNFAIR_NODE:-}" ]]; then
-    printf '%s,%s,%s' "$AP_NODE" "$FAIR_NODE" "$UNFAIR_NODE"
+    if [[ -n "${AP2_NODE:-}" ]]; then
+      printf '%s,%s,%s,%s' "$AP_NODE" "$AP2_NODE" "$FAIR_NODE" "$UNFAIR_NODE"
+    else
+      printf '%s,%s,%s' "$AP_NODE" "$FAIR_NODE" "$UNFAIR_NODE"
+    fi
   fi
 }
 split_csv() { tr ',' ' ' <<<"$1"; }
@@ -139,15 +159,13 @@ bool_default_letter() {
 }
 
 compose_driver_opts_prompt() {
-  local label="$1" current="$2" selfish disable idle txop extra opts
+  local label="$1" current="$2" selfish disable idle txop opts
   echo "Current $label options: ${current:-<none>}" >&2
   if prompt_yes_no "$label: selfish_mode" "$(bool_default_letter "$(get_opt_value "$current" selfish_mode 0)")"; then selfish=1; else selfish=0; fi
   if prompt_yes_no "$label: disable_backoff" "$(bool_default_letter "$(get_opt_value "$current" disable_backoff 0)")"; then disable=1; else disable=0; fi
   if prompt_yes_no "$label: chanel_idle (driver typo, AR_DIAG_FORCE_CH_IDLE_HIGH)" "$(bool_default_letter "$(get_opt_value "$current" chanel_idle 0)")"; then idle=1; else idle=0; fi
   txop=$(prompt_default "$label: selfish_txop_us (0 disables custom TXOP)" "$(get_opt_value "$current" selfish_txop_us 0)")
-  extra=$(prompt_default "$label: extra ath9k_hw options, if any" "")
   opts="selfish_mode=$selfish disable_backoff=$disable chanel_idle=$idle selfish_txop_us=$txop"
-  [[ -n "$extra" ]] && opts="$opts $extra"
   printf '%s' "$opts"
 }
 
@@ -225,10 +243,11 @@ Plots dir:         $PLOTS_DIR
 Patch file:        $PATCH_FILE
 Source repo:       $SRC_REPO
 Base ref:          $BASE_REF
-AP:                ${AP_NODE:-<unset>} ($AP_IP)
+AP1:               ${AP_NODE:-<unset>} ($AP_IP, SSID=$SSID)
+AP2:               ${AP2_NODE:-<unset>} ($AP2_IP, SSID=$AP2_SSID)
 Fair STA:          ${FAIR_NODE:-<unset>} ($FAIR_IP)
 Unfair STA:        ${UNFAIR_NODE:-<unset>} ($UNFAIR_IP)
-SSID/channel:      $SSID / $CHANNEL
+Channel:           $CHANNEL
 Default rates:     $RATES
 Duration:          ${DURATION}s
 Fair driver opts:  ${FAIR_DRIVER_OPTS:-<none>}
@@ -258,7 +277,7 @@ run_action() {
 # ---------- Config load/store ----------
 config_keys=(
   GATEWAY SLICE_NAME IMAGE BACKPORTS_DIR NODE_LOG_DIR LOCAL_RESULTS_DIR PLOTS_DIR PATCH_FILE SRC_REPO BASE_REF
-  AP_NODE FAIR_NODE UNFAIR_NODE AP_IP FAIR_IP UNFAIR_IP SSID CHANNEL RATES DURATION FIXED_RATE_DEFAULT DUAL_FAIR_LEAD_SECONDS
+  AP_NODE AP2_NODE FAIR_NODE UNFAIR_NODE AP_IP AP2_IP FAIR_IP UNFAIR_IP SSID AP2_SSID CHANNEL RATES DURATION FIXED_RATE_DEFAULT DUAL_FAIR_LEAD_SECONDS
   FAIR_DRIVER_OPTS UNFAIR_DRIVER_OPTS FAIR_PORT UNFAIR_PORT TCP_PORT_BASE
 )
 
@@ -487,10 +506,10 @@ modprobe ath9k
 
 start_ap() {
   require_nodes_config || return 1
-  local mode="${1:-n}" # n or g
+  local mode="${1:-n}" ap_node="${2:-$AP_NODE}" ap_ip="${3:-$AP_IP}" ssid="${4:-$SSID}" # mode: n or g
   local ieee80211n=1 hw_mode=g
   if [[ "$mode" == "g" ]]; then ieee80211n=0; hw_mode=g; fi
-  node_bash "$AP_NODE" "
+  node_bash "$ap_node" "
 set -euo pipefail
 mkdir -p '$NODE_LOG_DIR/setup'
 if ! command -v hostapd >/dev/null 2>&1; then
@@ -500,7 +519,7 @@ fi
 cat > /root/ece436_ap.conf <<EOF_AP
 interface=wlan0
 driver=nl80211
-ssid=$SSID
+ssid=$ssid
 hw_mode=$hw_mode
 channel=$CHANNEL
 ieee80211n=$ieee80211n
@@ -509,32 +528,32 @@ auth_algs=1
 ignore_broadcast_ssid=0
 EOF_AP
 ip link set wlan0 down 2>/dev/null || true
-ifconfig wlan0 '$AP_IP' up
+ifconfig wlan0 '$ap_ip' up
 killall hostapd 2>/dev/null || true
-nohup hostapd -dd /root/ece436_ap.conf > '$NODE_LOG_DIR/setup/${AP_NODE}_hostapd_${mode}.log' 2>&1 & echo \$! > '$NODE_LOG_DIR/setup/${AP_NODE}_hostapd.pid'
+nohup hostapd -dd /root/ece436_ap.conf > '$NODE_LOG_DIR/setup/${ap_node}_hostapd_${mode}.log' 2>&1 & echo \$! > '$NODE_LOG_DIR/setup/${ap_node}_hostapd.pid'
 sleep 2
-cat '$NODE_LOG_DIR/setup/${AP_NODE}_hostapd.pid'
-tail -40 '$NODE_LOG_DIR/setup/${AP_NODE}_hostapd_${mode}.log' || true
+cat '$NODE_LOG_DIR/setup/${ap_node}_hostapd.pid'
+tail -40 '$NODE_LOG_DIR/setup/${ap_node}_hostapd_${mode}.log' || true
 "
 }
 
 connect_sta() {
   require_nodes_config || return 1
-  local node="$1" ip="$2"
+  local node="$1" ip="$2" ssid="${3:-$SSID}" ap_ip="${4:-$AP_IP}"
   node_bash "$node" "
 set -euo pipefail
 mkdir -p '$NODE_LOG_DIR/setup'
 ip link set wlan0 down 2>/dev/null || true
 ifconfig wlan0 '$ip' up
 iw dev wlan0 disconnect 2>/dev/null || true
-iw dev wlan0 connect '$SSID' || true
+iw dev wlan0 connect '$ssid' || true
 sleep 3
 {
   date
   ip addr show wlan0
   iw dev wlan0 link || true
-  ping -c 5 '$AP_IP' || true
-} | tee '$NODE_LOG_DIR/setup/${node}_connect.log'
+  ping -c 5 '$ap_ip' || true
+} | tee '$NODE_LOG_DIR/setup/${node}_connect_${ssid}.log'
 "
 }
 
@@ -544,9 +563,22 @@ prepare_topology() {
   load_driver_on_node "$AP_NODE" "selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0" || return 1
   load_driver_on_node "$FAIR_NODE" "$fair_opts" || return 1
   load_driver_on_node "$UNFAIR_NODE" "$unfair_opts" || return 1
-  start_ap "$mode" || return 1
-  connect_sta "$FAIR_NODE" "$FAIR_IP" || return 1
-  connect_sta "$UNFAIR_NODE" "$UNFAIR_IP" || return 1
+  start_ap "$mode" "$AP_NODE" "$AP_IP" "$SSID" || return 1
+  connect_sta "$FAIR_NODE" "$FAIR_IP" "$SSID" "$AP_IP" || return 1
+  connect_sta "$UNFAIR_NODE" "$UNFAIR_IP" "$SSID" "$AP_IP" || return 1
+}
+
+prepare_two_ap_topology() {
+  require_two_ap_nodes_config || return 1
+  local unfair_opts="$1" fair_opts="$2" mode="${3:-n}"
+  load_driver_on_node "$AP_NODE" "selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0" || return 1
+  load_driver_on_node "$AP2_NODE" "selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0" || return 1
+  load_driver_on_node "$FAIR_NODE" "$fair_opts" || return 1
+  load_driver_on_node "$UNFAIR_NODE" "$unfair_opts" || return 1
+  start_ap "$mode" "$AP_NODE" "$AP_IP" "$SSID" || return 1
+  start_ap "$mode" "$AP2_NODE" "$AP2_IP" "$AP2_SSID" || return 1
+  connect_sta "$FAIR_NODE" "$FAIR_IP" "$SSID" "$AP_IP" || return 1
+  connect_sta "$UNFAIR_NODE" "$UNFAIR_IP" "$AP2_SSID" "$AP2_IP" || return 1
 }
 
 prepare_single_topology() {
@@ -566,8 +598,8 @@ prepare_single_topology() {
   esac
   load_driver_on_node "$AP_NODE" "selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0" || return 1
   load_driver_on_node "$sta_node" "$sta_opts" || return 1
-  start_ap "$mode" || return 1
-  connect_sta "$sta_node" "$sta_ip" || return 1
+  start_ap "$mode" "$AP_NODE" "$AP_IP" "$SSID" || return 1
+  connect_sta "$sta_node" "$sta_ip" "$SSID" "$AP_IP" || return 1
 }
 
 iperf_server() {
@@ -640,6 +672,32 @@ run_two_sta_once() {
   [[ "$rc1" -eq 0 && "$rc2" -eq 0 ]]
 }
 
+run_two_ap_once() {
+  require_two_ap_nodes_config || return 1
+  local proto="$1" fair_rate="$2" unfair_rate="$3" duration="$4" label="$5" fair_lead_seconds="${6:-$DUAL_FAIR_LEAD_SECONDS}"
+  if ! [[ "$fair_lead_seconds" =~ ^[0-9]+$ ]]; then
+    echo "Invalid fair lead delay: $fair_lead_seconds (must be non-negative integer seconds)" >&2
+    return 1
+  fi
+  iperf_server "$AP_NODE" "$proto" "$FAIR_PORT" "$label" || return 1
+  iperf_server "$AP2_NODE" "$proto" "$UNFAIR_PORT" "$label" || return 1
+  sleep 2
+  echo "[two-ap] starting fair STA toward AP1: node=$FAIR_NODE ap=$AP_NODE ip=$AP_IP rate=$fair_rate duration=${duration}s"
+  iperf_client "$FAIR_NODE" "$proto" "$AP_IP" "$fair_rate" "$duration" "$FAIR_PORT" "$label" "fair" &
+  local fair_pid=$!
+  if (( fair_lead_seconds > 0 )); then
+    echo "[two-ap] waiting ${fair_lead_seconds}s before starting unfair STA toward AP2"
+    sleep "$fair_lead_seconds"
+  fi
+  echo "[two-ap] starting unfair STA toward AP2: node=$UNFAIR_NODE ap=$AP2_NODE ip=$AP2_IP rate=$unfair_rate duration=${duration}s"
+  iperf_client "$UNFAIR_NODE" "$proto" "$AP2_IP" "$unfair_rate" "$duration" "$UNFAIR_PORT" "$label" "unfair" &
+  local unfair_pid=$!
+  local rc1=0 rc2=0
+  wait "$fair_pid" || rc1=$?
+  wait "$unfair_pid" || rc2=$?
+  [[ "$rc1" -eq 0 && "$rc2" -eq 0 ]]
+}
+
 run_single_sta_sweep() {
   require_nodes_config || return 1
   local which="$1" proto="$2" rates="$3" duration="$4" prefix="$5"
@@ -705,8 +763,15 @@ run_dual_sta_experiment() {
   run_dual_test_with_plan "fair_unfair_${proto}_11${wifi_mode}" "$proto" "$FAIR_DRIVER_OPTS" "$UNFAIR_DRIVER_OPTS" "$wifi_mode"
 }
 
-run_dual_test_with_plan() {
-  local test_name="$1" proto="$2" fair_opts="$3" unfair_opts="$4" wifi_mode="$5"
+run_two_ap_experiment() {
+  local proto wifi_mode
+  proto=$(prompt_protocol)
+  wifi_mode=$(prompt_wifi_mode)
+  run_two_ap_test_with_plan "two_ap_fair_unfair_${proto}_11${wifi_mode}" "$proto" "$FAIR_DRIVER_OPTS" "$UNFAIR_DRIVER_OPTS" "$wifi_mode"
+}
+
+run_dual_plan() {
+  local test_name="$1" proto="$2" fair_opts="$3" unfair_opts="$4" wifi_mode="$5" topology_fn="$6" run_once_fn="$7"
   local duration prefix plan mode fixed_node fixed_rate sweep_rates rate fair_rate unfair_rate label fair_lead_seconds
   duration=$(prompt_default "Duration seconds per run" "$DURATION")
   fair_lead_seconds=$(prompt_default "Seconds to start fair STA before unfair STA" "$DUAL_FAIR_LEAD_SECONDS")
@@ -717,7 +782,7 @@ run_dual_test_with_plan() {
   prefix=$(prompt_default "Log prefix" "${test_name}_$(ts)")
   IFS='|' read -r mode fixed_node fixed_rate sweep_rates <<<"$(ask_fixed_rate_plan)"
   if prompt_yes_no "Prepare topology/load drivers before test?" "y"; then
-    prepare_topology "$unfair_opts" "$fair_opts" "$wifi_mode" || return 1
+    "$topology_fn" "$unfair_opts" "$fair_opts" "$wifi_mode" || return 1
   fi
   # Keep driver options out of log paths. The collected experiment.conf records
   # FAIR_DRIVER_OPTS/UNFAIR_DRIVER_OPTS for the whole experiment.
@@ -725,39 +790,49 @@ run_dual_test_with_plan() {
     none)
       for rate in $(split_csv "$sweep_rates"); do
         label="${prefix}/unfair_$(rate_tag "$rate")_fair_$(rate_tag "$rate")_$(ts)_proto_${proto}_fairlead_${fair_lead_seconds}s"
-        run_two_sta_once "$proto" "$rate" "$rate" "$duration" "$label" "$fair_lead_seconds" || return 1
+        "$run_once_fn" "$proto" "$rate" "$rate" "$duration" "$label" "$fair_lead_seconds" || return 1
       done
       ;;
     unfair)
       for rate in $(split_csv "$sweep_rates"); do
         label="${prefix}/unfair_$(rate_tag "$fixed_rate")_fair_$(rate_tag "$rate")_$(ts)_proto_${proto}_fairlead_${fair_lead_seconds}s"
-        run_two_sta_once "$proto" "$rate" "$fixed_rate" "$duration" "$label" "$fair_lead_seconds" || return 1
+        "$run_once_fn" "$proto" "$rate" "$fixed_rate" "$duration" "$label" "$fair_lead_seconds" || return 1
       done
       ;;
     fair)
       for rate in $(split_csv "$sweep_rates"); do
         label="${prefix}/unfair_$(rate_tag "$rate")_fair_$(rate_tag "$fixed_rate")_$(ts)_proto_${proto}_fairlead_${fair_lead_seconds}s"
-        run_two_sta_once "$proto" "$fixed_rate" "$rate" "$duration" "$label" "$fair_lead_seconds" || return 1
+        "$run_once_fn" "$proto" "$fixed_rate" "$rate" "$duration" "$label" "$fair_lead_seconds" || return 1
       done
       ;;
     both)
       IFS=',' read -r fair_rate unfair_rate <<<"$fixed_rate"
       label="${prefix}/unfair_$(rate_tag "$unfair_rate")_fair_$(rate_tag "$fair_rate")_$(ts)_proto_${proto}_fairlead_${fair_lead_seconds}s"
-      run_two_sta_once "$proto" "$fair_rate" "$unfair_rate" "$duration" "$label" "$fair_lead_seconds" || return 1
+      "$run_once_fn" "$proto" "$fair_rate" "$unfair_rate" "$duration" "$label" "$fair_lead_seconds" || return 1
       ;;
   esac
+}
+
+run_dual_test_with_plan() {
+  run_dual_plan "$1" "$2" "$3" "$4" "$5" prepare_topology run_two_sta_once
+}
+
+run_two_ap_test_with_plan() {
+  run_dual_plan "$1" "$2" "$3" "$4" "$5" prepare_two_ap_topology run_two_ap_once
 }
 
 # ---------- Results ----------
 organize_collected_results() {
   local out="$1" raw="$2" fetch_stamp="$3"
-  python3 - "$out" "$raw" "$fetch_stamp" "$AP_NODE" "$FAIR_NODE" "$UNFAIR_NODE" "$FAIR_PORT" "$UNFAIR_PORT" <<'PY'
+  python3 - "$out" "$raw" "$fetch_stamp" "$AP_NODE" "$AP2_NODE" "$FAIR_NODE" "$UNFAIR_NODE" "$FAIR_PORT" "$UNFAIR_PORT" <<'PY'
 import re, shutil, sys
 from pathlib import Path
 out=Path(sys.argv[1]); raw=Path(sys.argv[2]); fetch_stamp=sys.argv[3]
-ap_node, fair_node, unfair_node = sys.argv[4], sys.argv[5], sys.argv[6]
-fair_port, unfair_port = sys.argv[7], sys.argv[8]
+ap_node, ap2_node, fair_node, unfair_node = sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7]
+fair_port, unfair_port = sys.argv[8], sys.argv[9]
 node_roles={ap_node:f"AP_{ap_node}", fair_node:f"fair_{fair_node}", unfair_node:f"unfair_{unfair_node}"}
+if ap2_node:
+    node_roles[ap2_node]=f"AP2_{ap2_node}"
 
 def safe(s):
     s=re.sub(r'[^A-Za-z0-9_.-]+','_',str(s)).strip('_')
@@ -844,7 +919,7 @@ for node_dir in sorted([p for p in raw.iterdir() if p.is_dir()]):
             new_name=f"{fair_rate}_{run_stamp}.log"
         elif node == unfair_node:
             new_name=f"{unfair_rate}_{run_stamp}.log"
-        elif node == ap_node:
+        elif node == ap_node or node == ap2_node:
             suffix=f"_p{port}" if port else ''
             new_name=f"unfair_{unfair_rate}_fair_{fair_rate}{suffix}_{run_stamp}.log"
         else:
@@ -927,7 +1002,7 @@ for f in sorted(indir.rglob('*.log')):
     label=indir.name
     unfair_rate, fair_rate = pair_from_rel(rel)
     name=f.name
-    role='server' if '_server_' in name or node.startswith('AP_') else 'client' if '_client_' in name or node.startswith(('fair_','unfair_')) else 'unknown'
+    role='server' if '_server_' in name or node.startswith(('AP_','AP2_')) else 'client' if '_client_' in name or node.startswith(('fair_','unfair_')) else 'unknown'
     proto='tcp' if '_tcp_' in name else 'udp' if '_udp_' in name else 'unknown'
     port=''; offered_rate=''; duration=''; server_ip=''
     pm=re.search(r'_p(\d+)', name)
@@ -1124,8 +1199,7 @@ setup_menu() {
     echo "2) set default nodes"
     echo "3) set default rates"
     echo "4) load image to nodes"
-    echo "5) load image to one node"
-    echo "6) send patch + apply + build/install backports on nodes"
+    echo "5) send patch + apply + build/install backports on nodes"
     echo "7) load settings from config"
     echo "8) export settings to config"
     echo "9) edit general settings"
@@ -1133,14 +1207,13 @@ setup_menu() {
     read -r -p "Select: " c
     case "$c" in
       1) local p; p=$(prompt_default "Patch filename" "$PATCH_FILE"); run_action "generate patch" generate_patch "$p"; pause;;
-      2) AP_NODE=$(prompt_default "AP node" "$AP_NODE"); FAIR_NODE=$(prompt_default "Fair STA node" "$FAIR_NODE"); UNFAIR_NODE=$(prompt_default "Unfair STA node" "$UNFAIR_NODE"); AP_IP=$(prompt_default "AP IP" "$AP_IP"); FAIR_IP=$(prompt_default "Fair STA IP" "$FAIR_IP"); UNFAIR_IP=$(prompt_default "Unfair STA IP" "$UNFAIR_IP");;
+      2) AP_NODE=$(prompt_default "AP1 node" "$AP_NODE"); AP2_NODE=$(prompt_default "AP2 node (optional, for two-AP topology)" "$AP2_NODE"); FAIR_NODE=$(prompt_default "Fair STA node" "$FAIR_NODE"); UNFAIR_NODE=$(prompt_default "Unfair STA node" "$UNFAIR_NODE"); AP_IP=$(prompt_default "AP1 IP" "$AP_IP"); AP2_IP=$(prompt_default "AP2 IP" "$AP2_IP"); FAIR_IP=$(prompt_default "Fair STA IP" "$FAIR_IP"); UNFAIR_IP=$(prompt_default "Unfair STA IP" "$UNFAIR_IP");;
       3) RATES=$(prompt_default "Rates comma-separated" "$RATES"); DURATION=$(prompt_default "Duration seconds" "$DURATION"); FIXED_RATE_DEFAULT=$(prompt_default "Default fixed rate" "$FIXED_RATE_DEFAULT"); DUAL_FAIR_LEAD_SECONDS=$(prompt_default "Dual tests: seconds to start fair STA before unfair STA" "$DUAL_FAIR_LEAD_SECONDS");;
       4) local nodes; nodes=$(prompt_default "Nodes comma-separated" "$(all_nodes_csv_or_empty)"); run_action "load image" load_image_to_nodes "$nodes"; pause;;
-      5) local node; node=$(prompt_default "Single node to image" "$UNFAIR_NODE"); run_action "load image on one node: $node" load_image_to_nodes "$node"; pause;;
-      6) local nodes p; nodes=$(prompt_default "Nodes comma-separated" "$(all_nodes_csv_or_empty)"); p=$(prompt_default "Patch file" "$PATCH_FILE"); run_action "send patch + build/install" deploy_patch_and_build_nodes "$nodes" "$p"; pause;;
+      5) local nodes p; nodes=$(prompt_default "Nodes comma-separated" "$(all_nodes_csv_or_empty)"); p=$(prompt_default "Patch file" "$PATCH_FILE"); run_action "send patch + build/install" deploy_patch_and_build_nodes "$nodes" "$p"; pause;;
       7) local f; f=$(prompt_default "Config file to load" "$SCRIPT_DIR/experiment.conf"); load_config "$f"; pause;;
       8) local f; f=$(prompt_default "Config file to write" "$SCRIPT_DIR/experiment.conf"); export_config "$f"; pause;;
-      9) GATEWAY=$(prompt_default "Gateway" "$GATEWAY"); SLICE_NAME=$(prompt_default "Slice name" "$SLICE_NAME"); IMAGE=$(prompt_default "Image" "$IMAGE"); BACKPORTS_DIR=$(prompt_default "Backports dir on nodes" "$BACKPORTS_DIR"); NODE_LOG_DIR=$(prompt_default "Node log dir" "$NODE_LOG_DIR"); LOCAL_RESULTS_DIR=$(prompt_default "Local results dir" "$LOCAL_RESULTS_DIR"); PLOTS_DIR=$(prompt_default "Plots dir" "$PLOTS_DIR"); SSID=$(prompt_default "SSID" "$SSID"); CHANNEL=$(prompt_default "Channel" "$CHANNEL"); SRC_REPO=$(prompt_default "Source repo" "$SRC_REPO"); BASE_REF=$(prompt_default "Base git ref" "$BASE_REF"); normalize_path_settings;;
+      9) GATEWAY=$(prompt_default "Gateway" "$GATEWAY"); SLICE_NAME=$(prompt_default "Slice name" "$SLICE_NAME"); IMAGE=$(prompt_default "Image" "$IMAGE"); BACKPORTS_DIR=$(prompt_default "Backports dir on nodes" "$BACKPORTS_DIR"); NODE_LOG_DIR=$(prompt_default "Node log dir" "$NODE_LOG_DIR"); LOCAL_RESULTS_DIR=$(prompt_default "Local results dir" "$LOCAL_RESULTS_DIR"); PLOTS_DIR=$(prompt_default "Plots dir" "$PLOTS_DIR"); SSID=$(prompt_default "AP1 SSID" "$SSID"); AP2_SSID=$(prompt_default "AP2 SSID" "$AP2_SSID"); CHANNEL=$(prompt_default "Channel" "$CHANNEL"); SRC_REPO=$(prompt_default "Source repo" "$SRC_REPO"); BASE_REF=$(prompt_default "Base git ref" "$BASE_REF"); normalize_path_settings;;
       b|B) return 0;;
       *) echo "Unknown option"; sleep 1;;
     esac
@@ -1155,31 +1228,17 @@ driver_options_menu() {
     echo "Fair opts:   ${FAIR_DRIVER_OPTS:-<none>}"
     echo "Unfair opts: ${UNFAIR_DRIVER_OPTS:-<none>}"
     echo
-    echo "1) set fair STA ath9k_hw options (raw string)"
-    echo "2) set unfair STA ath9k_hw options (raw string)"
-    echo "3) baseline preset for both STAs"
-    echo "4) selfish preset: fair=0, unfair=1"
-    echo "5) prompt/toggle fair options (selfish/disable_backoff/chanel_idle/selfish_txop_us)"
-    echo "6) prompt/toggle unfair options (selfish/disable_backoff/chanel_idle/selfish_txop_us)"
-    echo "7) unfair disable_backoff preset"
-    echo "8) unfair chanel_idle preset"
-    echo "9) unfair disable_backoff + chanel_idle preset"
-    echo "10) load drivers now with current options"
-    echo "11) status/debug nodes"
+    echo "1) select fair options (selfish/disable_backoff/chanel_idle/selfish_txop_us)"
+    echo "2) select unfair options (selfish/disable_backoff/chanel_idle/selfish_txop_us)"
+    echo "3) load drivers now with current options"
+    echo "4) status/debug nodes"
     echo "b) back"
     read -r -p "Select: " c
     case "$c" in
-      1) FAIR_DRIVER_OPTS=$(prompt_default "Fair ath9k_hw module options" "$FAIR_DRIVER_OPTS");;
-      2) UNFAIR_DRIVER_OPTS=$(prompt_default "Unfair ath9k_hw module options" "$UNFAIR_DRIVER_OPTS");;
-      3) FAIR_DRIVER_OPTS="selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0"; UNFAIR_DRIVER_OPTS="selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0"; echo "Preset applied."; sleep 1;;
-      4) FAIR_DRIVER_OPTS="selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0"; UNFAIR_DRIVER_OPTS="selfish_mode=1 disable_backoff=0 chanel_idle=0 selfish_txop_us=0"; echo "Preset applied."; sleep 1;;
-      5) FAIR_DRIVER_OPTS=$(compose_driver_opts_prompt "fair STA" "$FAIR_DRIVER_OPTS");;
-      6) UNFAIR_DRIVER_OPTS=$(compose_driver_opts_prompt "unfair STA" "$UNFAIR_DRIVER_OPTS");;
-      7) FAIR_DRIVER_OPTS="selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0"; UNFAIR_DRIVER_OPTS="selfish_mode=1 disable_backoff=1 chanel_idle=0 selfish_txop_us=0"; echo "Preset applied."; sleep 1;;
-      8) FAIR_DRIVER_OPTS="selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0"; UNFAIR_DRIVER_OPTS="selfish_mode=1 disable_backoff=0 chanel_idle=1 selfish_txop_us=0"; echo "Preset applied."; sleep 1;;
-      9) FAIR_DRIVER_OPTS="selfish_mode=0 disable_backoff=0 chanel_idle=0 selfish_txop_us=0"; UNFAIR_DRIVER_OPTS="selfish_mode=1 disable_backoff=1 chanel_idle=1 selfish_txop_us=0"; echo "Preset applied."; sleep 1;;
-      10) run_action "load drivers" prepare_topology "$UNFAIR_DRIVER_OPTS" "$FAIR_DRIVER_OPTS" "n"; pause;;
-      11) run_action "status" status_nodes "$(all_nodes_csv_or_empty)"; pause;;
+      1) FAIR_DRIVER_OPTS=$(compose_driver_opts_prompt "fair STA" "$FAIR_DRIVER_OPTS");;
+      2) UNFAIR_DRIVER_OPTS=$(compose_driver_opts_prompt "unfair STA" "$UNFAIR_DRIVER_OPTS");;
+      3) run_action "load drivers" prepare_topology "$UNFAIR_DRIVER_OPTS" "$FAIR_DRIVER_OPTS" "n"; pause;;
+      4) run_action "status" status_nodes "$(all_nodes_csv_or_empty)"; pause;;
       b|B) return 0;;
       *) echo "Unknown option"; sleep 1;;
     esac
@@ -1194,12 +1253,14 @@ test_menu() {
     echo "1) fair node only"
     echo "2) unfair node only"
     echo "3) fair + unfair nodes"
+    echo "4) AP1-fair + AP2-unfair nodes"
     echo "b) back"
     read -r -p "Select: " c
     case "$c" in
       1) run_action "fair node only" run_single_sta_experiment "fair"; pause;;
       2) run_action "unfair node only" run_single_sta_experiment "unfair"; pause;;
       3) run_action "fair + unfair nodes" run_dual_sta_experiment; pause;;
+      4) run_action "AP1-fair + AP2-unfair nodes" run_two_ap_experiment; pause;;
       b|B) return 0;;
       *) echo "Unknown option"; sleep 1;;
     esac
