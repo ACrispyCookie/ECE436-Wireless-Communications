@@ -126,6 +126,20 @@ gateway_target() {
   fi
 }
 
+display_script_relative_path() {
+  local path="${1:-}"
+  if [[ -z "$path" ]]; then
+    printf '<unset>'
+  elif [[ "$path" == /* ]]; then
+    python3 - "$path" "$SCRIPT_DIR" <<'PY'
+import os, sys
+print(os.path.relpath(sys.argv[1], sys.argv[2]))
+PY
+  else
+    printf '%s' "$path"
+  fi
+}
+
 normalize_path_settings
 
 get_opt_value() {
@@ -238,11 +252,11 @@ Gateway SSH:       $(gateway_target)
 Image:             $IMAGE
 Backports dir:     $BACKPORTS_DIR
 Node log dir:      $NODE_LOG_DIR
-Local results dir: $LOCAL_RESULTS_DIR
-Plots dir:         $PLOTS_DIR
-Patch file:        $PATCH_FILE
-Source repo:       $SRC_REPO
-Base ref:          $BASE_REF
+Local results dir: $(display_script_relative_path "$LOCAL_RESULTS_DIR")
+Plots dir:         $(display_script_relative_path "$PLOTS_DIR")
+Patch file:        $(display_script_relative_path "$PATCH_FILE")
+Source repo:       $(display_script_relative_path "$SRC_REPO")
+Base ref:          $(display_script_relative_path "$BASE_REF")
 AP1:               ${AP_NODE:-<unset>} ($AP_IP, SSID=$SSID)
 AP2:               ${AP2_NODE:-<unset>} ($AP2_IP, SSID=$AP2_SSID)
 Fair STA:          ${FAIR_NODE:-<unset>} ($FAIR_IP)
