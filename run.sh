@@ -9,8 +9,8 @@ set -euo pipefail
 #   ./run.sh fetch-results ./collected_logs
 #   ./run.sh parse-results ./collected_logs
 #
-# This script intentionally keeps all experiment outputs separated by labels that
-# include test type, selected rates, driver option tags, and timestamp.
+# Results are collected as one directory per experiment. Each experiment stores
+# its settings in experiment.conf; driver options are kept out of directory names.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -21,6 +21,7 @@ IMAGE="${IMAGE:-baseline_wireless_communications.ndz}"
 BACKPORTS_DIR="${BACKPORTS_DIR:-/root/backports-5.4.56-1}"
 NODE_LOG_DIR="${NODE_LOG_DIR:-/root/ece436_exp_logs}"
 LOCAL_RESULTS_DIR="${LOCAL_RESULTS_DIR:-$SCRIPT_DIR/results}"
+PLOTS_DIR="${PLOTS_DIR:-$SCRIPT_DIR/plots}"
 PATCH_FILE="${PATCH_FILE:-$SCRIPT_DIR/ath9k_experiment.patch}"
 SRC_REPO="${SRC_REPO:-$SCRIPT_DIR}"
 BASE_REF="${BASE_REF:-origin/baseline}"
@@ -174,6 +175,7 @@ Image:             $IMAGE
 Backports dir:     $BACKPORTS_DIR
 Node log dir:      $NODE_LOG_DIR
 Local results dir: $LOCAL_RESULTS_DIR
+Plots dir:         $PLOTS_DIR
 Patch file:        $PATCH_FILE
 Source repo:       $SRC_REPO
 Base ref:          $BASE_REF
@@ -209,7 +211,7 @@ run_action() {
 
 # ---------- Config load/store ----------
 config_keys=(
-  GATEWAY SLICE_NAME IMAGE BACKPORTS_DIR NODE_LOG_DIR LOCAL_RESULTS_DIR PATCH_FILE SRC_REPO BASE_REF
+  GATEWAY SLICE_NAME IMAGE BACKPORTS_DIR NODE_LOG_DIR LOCAL_RESULTS_DIR PLOTS_DIR PATCH_FILE SRC_REPO BASE_REF
   AP_NODE FAIR_NODE UNFAIR_NODE AP_IP FAIR_IP UNFAIR_IP SSID CHANNEL RATES DURATION FIXED_RATE_DEFAULT DUAL_FAIR_LEAD_SECONDS
   FAIR_DRIVER_OPTS UNFAIR_DRIVER_OPTS FAIR_PORT UNFAIR_PORT TCP_PORT_BASE
 )
@@ -627,45 +629,153 @@ run_dual_test_with_plan() {
   if prompt_yes_no "Prepare topology/load drivers before test?" "y"; then
     prepare_topology "$unfair_opts" "$fair_opts" "$wifi_mode" || return 1
   fi
-  local fair_tag unfair_tag
-  fair_tag=$(join_opts_tag "$fair_opts")
-  unfair_tag=$(join_opts_tag "$unfair_opts")
+  # Keep driver options out of log paths. The collected experiment.conf records
+  # FAIR_DRIVER_OPTS/UNFAIR_DRIVER_OPTS for the whole experiment.
   case "$mode" in
     none)
       for rate in $(split_csv "$sweep_rates"); do
-        label="${prefix}_proto_${proto}_rate_$(rate_tag "$rate")_fairlead_${fair_lead_seconds}s_fair_${fair_tag}_unfair_${unfair_tag}"
+        label="${prefix}/unfair_$(rate_tag "$rate")_fair_$(rate_tag "$rate")_$(ts)_proto_${proto}_fairlead_${fair_lead_seconds}s"
         run_two_sta_once "$proto" "$rate" "$rate" "$duration" "$label" "$fair_lead_seconds" || return 1
       done
       ;;
     unfair)
       for rate in $(split_csv "$sweep_rates"); do
-        label="${prefix}_proto_${proto}_fair_sweep_$(rate_tag "$rate")_unfair_fixed_$(rate_tag "$fixed_rate")_fairlead_${fair_lead_seconds}s_fair_${fair_tag}_unfair_${unfair_tag}"
+        label="${prefix}/unfair_$(rate_tag "$fixed_rate")_fair_$(rate_tag "$rate")_$(ts)_proto_${proto}_fairlead_${fair_lead_seconds}s"
         run_two_sta_once "$proto" "$rate" "$fixed_rate" "$duration" "$label" "$fair_lead_seconds" || return 1
       done
       ;;
     fair)
       for rate in $(split_csv "$sweep_rates"); do
-        label="${prefix}_proto_${proto}_fair_fixed_$(rate_tag "$fixed_rate")_unfair_sweep_$(rate_tag "$rate")_fairlead_${fair_lead_seconds}s_fair_${fair_tag}_unfair_${unfair_tag}"
+        label="${prefix}/unfair_$(rate_tag "$rate")_fair_$(rate_tag "$fixed_rate")_$(ts)_proto_${proto}_fairlead_${fair_lead_seconds}s"
         run_two_sta_once "$proto" "$fixed_rate" "$rate" "$duration" "$label" "$fair_lead_seconds" || return 1
       done
       ;;
     both)
       IFS=',' read -r fair_rate unfair_rate <<<"$fixed_rate"
-      label="${prefix}_proto_${proto}_fair_fixed_$(rate_tag "$fair_rate")_unfair_fixed_$(rate_tag "$unfair_rate")_fairlead_${fair_lead_seconds}s_fair_${fair_tag}_unfair_${unfair_tag}"
+      label="${prefix}/unfair_$(rate_tag "$unfair_rate")_fair_$(rate_tag "$fair_rate")_$(ts)_proto_${proto}_fairlead_${fair_lead_seconds}s"
       run_two_sta_once "$proto" "$fair_rate" "$unfair_rate" "$duration" "$label" "$fair_lead_seconds" || return 1
       ;;
   esac
 }
 
 # ---------- Results ----------
+organize_collected_results() {
+  local out="$1" raw="$2" fetch_stamp="$3"
+  python3 - "$out" "$raw" "$fetch_stamp" "$AP_NODE" "$FAIR_NODE" "$UNFAIR_NODE" "$FAIR_PORT" "$UNFAIR_PORT" <<'PY'
+import re, shutil, sys
+from pathlib import Path
+out=Path(sys.argv[1]); raw=Path(sys.argv[2]); fetch_stamp=sys.argv[3]
+ap_node, fair_node, unfair_node = sys.argv[4], sys.argv[5], sys.argv[6]
+fair_port, unfair_port = sys.argv[7], sys.argv[8]
+node_roles={ap_node:f"AP_{ap_node}", fair_node:f"fair_{fair_node}", unfair_node:f"unfair_{unfair_node}"}
+
+def safe(s):
+    s=re.sub(r'[^A-Za-z0-9_.-]+','_',str(s)).strip('_')
+    return s or 'unknown'
+
+def unique(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stem, suffix = path.stem, path.suffix
+    i=2
+    while True:
+        cand=path.with_name(f"{stem}_{i}{suffix}")
+        if not cand.exists():
+            return cand
+        i+=1
+
+def split_label(label_parts):
+    # Expected remote layout for new runs:
+    #   <experiment_name>_<timestamp>/unfair_<rate>_fair_<rate>_<timestamp>_proto_...
+    if len(label_parts) < 2:
+        return None
+    return safe(label_parts[0]), label_parts[1], '/'.join(label_parts)
+
+def pair_from_label(label):
+    m=re.search(r'unfair_([^_/]+)_fair_([^_/]+)', label)
+    if not m:
+        return 'unknown', 'unknown'
+    return safe(m.group(1)), safe(m.group(2))
+
+def stamp_from(*texts):
+    for text in texts:
+        m=re.search(r'(20\d{6}_\d{6}(?:_[0-9]{2})?)', text or '')
+        if m: return m.group(1)
+    return fetch_stamp
+
+def file_port(name):
+    m=re.search(r'_p(\d+)\.log$', name)
+    return m.group(1) if m else ''
+
+experiments=set()
+for node_dir in sorted([p for p in raw.iterdir() if p.is_dir()]):
+    node=node_dir.name
+    role_dir=node_roles.get(node, node)
+    log_files=[p for p in node_dir.rglob('*.log') if p.is_file()]
+    node_experiments=set()
+    for f in log_files:
+        rel=f.relative_to(node_dir)
+        if rel.parts and rel.parts[0] == 'setup':
+            continue
+        if 'iperf' not in f.name:
+            continue
+        parsed = split_label(rel.parts[:-1])
+        if parsed is None:
+            continue
+        exp, _, _ = parsed
+        node_experiments.add(exp); experiments.add(exp)
+    if not node_experiments:
+        node_experiments.add(f"collected_{fetch_stamp}"); experiments.update(node_experiments)
+    setup=node_dir/'setup'
+    if setup.exists():
+        for exp in node_experiments:
+            dest=out/exp/role_dir/'setup'
+            dest.mkdir(parents=True, exist_ok=True)
+            for item in setup.iterdir():
+                target=unique(dest/item.name)
+                if item.is_dir(): shutil.copytree(item, target)
+                else: shutil.copy2(item, target)
+    for f in log_files:
+        rel=f.relative_to(node_dir)
+        if rel.parts and rel.parts[0] == 'setup':
+            continue
+        if 'iperf' not in f.name:
+            continue
+        parsed = split_label(rel.parts[:-1])
+        if parsed is None:
+            continue
+        exp, run_label, full_label = parsed
+        unfair_rate, fair_rate = pair_from_label(full_label)
+        run_stamp=stamp_from(run_label, full_label, f.name)
+        port=file_port(f.name)
+        dest_dir=out/exp/role_dir
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        if node == fair_node:
+            new_name=f"{fair_rate}_{run_stamp}.log"
+        elif node == unfair_node:
+            new_name=f"{unfair_rate}_{run_stamp}.log"
+        elif node == ap_node:
+            suffix=f"_p{port}" if port else ''
+            new_name=f"unfair_{unfair_rate}_fair_{fair_rate}{suffix}_{run_stamp}.log"
+        else:
+            new_name=f"{safe(f.stem)}_{run_stamp}.log"
+        shutil.copy2(f, unique(dest_dir/new_name))
+for exp in sorted(experiments):
+    (out/exp).mkdir(parents=True, exist_ok=True)
+print(f"Organized {len(experiments)} experiment(s) under {out}")
+PY
+}
+
 fetch_results() {
   local out="${1:-$LOCAL_RESULTS_DIR/collected_$(ts)}" nodes="${2:-}"
   if [[ -z "$nodes" ]]; then nodes="$(all_nodes_csv)" || return 1; fi
   mkdir -p "$out"
-  local stamp n
+  local stamp n raw
   stamp="$(ts)"
+  raw="$out/.raw_${stamp}"
+  mkdir -p "$raw"
   for n in $(split_csv "$nodes"); do
-    echo "[fetch] $n -> $out/$n"
+    echo "[fetch] $n -> $raw/$n"
     node_bash "$n" "
 set -euo pipefail
 if [[ -d '$NODE_LOG_DIR' ]]; then
@@ -676,15 +786,25 @@ else
 fi
 "
     gw "scp root@'$n':'/tmp/${n}_ece436_logs_${stamp}.tar.gz' '/tmp/${n}_ece436_logs_${stamp}.tar.gz'"
-    scp "${SSH_OPTS[@]}" "$GATEWAY:/tmp/${n}_ece436_logs_${stamp}.tar.gz" "$out/"
-    mkdir -p "$out/$n"
-    tar xzf "$out/${n}_ece436_logs_${stamp}.tar.gz" -C "$out/$n"
+    scp "${SSH_OPTS[@]}" "$GATEWAY:/tmp/${n}_ece436_logs_${stamp}.tar.gz" "$raw/"
+    mkdir -p "$raw/$n"
+    tar xzf "$raw/${n}_ece436_logs_${stamp}.tar.gz" -C "$raw/$n"
+  done
+  organize_collected_results "$out" "$raw" "$stamp"
+  rm -rf "$raw"
+  local exp
+  for exp in "$out"/*; do
+    [[ -d "$exp" ]] || continue
+    export_config "$exp/experiment.conf"
+    parse_results "$exp" "$exp/summary.csv"
+    plot_results "$exp" "$exp/summary.csv" "$PLOTS_DIR/$(basename "$exp")"
   done
   echo "Collected logs under: $out"
+  echo "Plots under: $PLOTS_DIR"
 }
 
 parse_results() {
-  local indir="$1" out="${2:-$indir/iperf_summary.csv}"
+  local indir="$1" out="${2:-$indir/summary.csv}"
   [[ -d "$indir" ]] || { echo "Input directory not found: $indir" >&2; return 1; }
   python3 - "$indir" "$out" <<'PY'
 import csv, re, sys
@@ -693,8 +813,16 @@ indir = Path(sys.argv[1])
 out = Path(sys.argv[2])
 bw_re = re.compile(r'\[\s*\d+\]\s+(?P<interval>\d+(?:\.\d+)?\s*-\s*\d+(?:\.\d+)?)\s+sec\s+(?P<transfer>[\d.]+)\s+(?P<transfer_unit>[KMG]?Bytes)\s+(?P<bw>[\d.]+)\s+(?P<bw_unit>[KMG]?bits/sec)(?:\s+(?P<jitter>[\d.]+)\s+ms\s+(?P<lost>\d+)\s*/\s*(?P<total>\d+)\s*\((?P<loss_pct>[\d.]+)%\))?')
 cmd_re = re.compile(r'iperf\s+-c\s+(?P<server_ip>\S+).*?(?:-u\s+)?-p\s+(?P<port>\d+)(?:.*?-b\s+(?P<rate>\S+))?.*?-t\s+(?P<duration>\S+)')
+
+def pair_from_rel(rel):
+    text=str(rel)
+    m=re.search(r'unfair_([^_/]+)_fair_([^_/]+)', text)
+    if m: return m.group(1), m.group(2)
+    return '', ''
 rows=[]
-for f in sorted(indir.rglob('*iperf*log')):
+for f in sorted(indir.rglob('*.log')):
+    if not f.is_file() or 'setup' in f.parts:
+        continue
     text=f.read_text(errors='replace')
     lines=[ln.strip() for ln in text.splitlines() if ln.strip()]
     matches=[]
@@ -705,25 +833,26 @@ for f in sorted(indir.rglob('*iperf*log')):
     rel=f.relative_to(indir)
     parts=rel.parts
     node=parts[0] if parts else ''
-    label=''
-    if len(parts) >= 3:
-        # node/<label>/file.log or node/setup/file.log
-        label=parts[-2]
+    label=indir.name
+    unfair_rate, fair_rate = pair_from_rel(rel)
     name=f.name
-    role='server' if '_server_' in name else 'client' if '_client_' in name else 'unknown'
+    role='server' if '_server_' in name or node.startswith('AP_') else 'client' if '_client_' in name or node.startswith(('fair_','unfair_')) else 'unknown'
     proto='tcp' if '_tcp_' in name else 'udp' if '_udp_' in name else 'unknown'
     port=''; offered_rate=''; duration=''; server_ip=''
-    pm=re.search(r'_p(\d+)\.log$', name)
+    pm=re.search(r'_p(\d+)', name)
     if pm: port=pm.group(1)
     for l2 in lines:
         cm=cmd_re.search(l2)
         if cm:
             server_ip=cm.group('server_ip'); port=cm.group('port') or port; offered_rate=cm.group('rate') or ''; duration=cm.group('duration') or ''
             break
-    # Keep all interval rows plus mark final row. This supports time plots.
+    if not offered_rate:
+        cm=re.match(r'([^_]+)_20\d{6}_\d{6}\.log$', name)
+        if cm and node.startswith(('fair_','unfair_')): offered_rate=cm.group(1)
     for idx,(ln,m) in enumerate(matches):
         rows.append({
             'label': label, 'node': node, 'role': role, 'proto': proto, 'port': port,
+            'fair_rate': fair_rate, 'unfair_rate': unfair_rate,
             'offered_rate': offered_rate, 'duration_s': duration, 'server_ip': server_ip,
             'interval_s': m.group('interval').replace(' ', ''), 'is_final': '1' if idx == len(matches)-1 else '0',
             'transfer': m.group('transfer'), 'transfer_unit': m.group('transfer_unit'),
@@ -732,7 +861,7 @@ for f in sorted(indir.rglob('*iperf*log')):
             'source_file': str(rel), 'summary_line': ln,
         })
 out.parent.mkdir(parents=True, exist_ok=True)
-fields=['label','node','role','proto','port','offered_rate','duration_s','server_ip','interval_s','is_final','transfer','transfer_unit','bandwidth','bandwidth_unit','jitter_ms','lost','total','loss_pct','source_file','summary_line']
+fields=['label','node','role','proto','port','fair_rate','unfair_rate','offered_rate','duration_s','server_ip','interval_s','is_final','transfer','transfer_unit','bandwidth','bandwidth_unit','jitter_ms','lost','total','loss_pct','source_file','summary_line']
 with out.open('w', newline='') as fh:
     w=csv.DictWriter(fh, fieldnames=fields); w.writeheader(); w.writerows(rows)
 print(f'Wrote {len(rows)} rows to {out}')
@@ -740,18 +869,20 @@ print('Final receiver/server rows:')
 for r in rows:
     if r['role']=='server' and r['is_final']=='1':
         loss = f" loss={r['lost']}/{r['total']} ({r['loss_pct']}%)" if r['lost'] else ''
-        print(f"{r['label']} {r['node']} {r['proto']} port={r['port']} bw={r['bandwidth']} {r['bandwidth_unit']}{loss}")
+        pair = f" unfair={r['unfair_rate']} fair={r['fair_rate']}" if r['unfair_rate'] or r['fair_rate'] else ''
+        print(f"{r['label']}{pair} {r['node']} {r['proto']} port={r['port']} bw={r['bandwidth']} {r['bandwidth_unit']}{loss}")
 PY
 }
 
 plot_results() {
-  local indir="$1" csv="${2:-$indir/iperf_summary.csv}" outdir="${3:-$indir/plots}"
+  local indir="$1" csv="${2:-$indir/summary.csv}" outdir="${3:-$PLOTS_DIR/$(basename "$indir")}" 
   [[ -f "$csv" ]] || parse_results "$indir" "$csv"
-  python3 - "$csv" "$outdir" <<'PY'
+  python3 - "$csv" "$outdir" "$FAIR_PORT" "$UNFAIR_PORT" <<'PY'
 import csv, re, sys
 from collections import defaultdict
 from pathlib import Path
-csv_path=Path(sys.argv[1]); outdir=Path(sys.argv[2]); outdir.mkdir(parents=True, exist_ok=True)
+csv_path=Path(sys.argv[1]); outdir=Path(sys.argv[2]); fair_port=sys.argv[3]; unfair_port=sys.argv[4]
+outdir.mkdir(parents=True, exist_ok=True)
 try:
     import matplotlib
     matplotlib.use('Agg')
@@ -768,91 +899,111 @@ def bw_mbps(v,u):
 def start_s(interval):
     m=re.match(r'([0-9.]+)-', interval or '')
     return float(m.group(1)) if m else 0.0
+
+def safe(s): return re.sub(r'[^A-Za-z0-9_.-]+','_',str(s)).strip('_') or 'unknown'
 rows=list(csv.DictReader(csv_path.open()))
 series=defaultdict(list)
 for r in rows:
     if r.get('role')!='server' or r.get('is_final')=='1':
         continue
+    unfair=safe(r.get('unfair_rate') or 'unknown')
+    fair=safe(r.get('fair_rate') or 'unknown')
     try: y=bw_mbps(r['bandwidth'], r['bandwidth_unit'])
     except Exception: continue
-    key=(r['label'], f"server_port_{r['port']}")
-    series[key].append((start_s(r['interval_s']), y))
-labels=sorted(set(k[0] for k in series))
-
-def write_svg(path, label, label_series):
-    width, height = 1000, 520
-    ml, mr, mt, mb = 70, 30, 55, 70
-    colors = ['#1f77b4', '#d62728', '#2ca02c', '#9467bd', '#ff7f0e', '#17becf']
-    allpts=[p for _,pts in label_series for p in pts]
-    if not allpts:
-        return
-    xmax=max([p[0] for p in allpts] + [1.0])
-    ymax=max([p[1] for p in allpts] + [1.0])
-    def sx(x): return ml + (x / xmax) * (width - ml - mr)
-    def sy(y): return height - mb - (y / ymax) * (height - mt - mb)
-    def esc(s): return str(s).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
-    parts=[]
-    parts.append(f"<svg xmlns='http://www.w3.org/2000/svg' width='{width}' height='{height}' viewBox='0 0 {width} {height}'>")
-    parts.append("<rect width='100%' height='100%' fill='white'/>")
-    parts.append(f"<text x='{width/2}' y='28' text-anchor='middle' font-family='sans-serif' font-size='18'>{esc(label)}</text>")
-    parts.append(f"<line x1='{ml}' y1='{height-mb}' x2='{width-mr}' y2='{height-mb}' stroke='black'/>")
-    parts.append(f"<line x1='{ml}' y1='{mt}' x2='{ml}' y2='{height-mb}' stroke='black'/>")
-    for i in range(6):
-        x=xmax*i/5; px=sx(x)
-        parts.append(f"<line x1='{px:.1f}' y1='{height-mb}' x2='{px:.1f}' y2='{height-mb+5}' stroke='black'/>")
-        parts.append(f"<text x='{px:.1f}' y='{height-mb+22}' text-anchor='middle' font-family='sans-serif' font-size='11'>{x:.0f}</text>")
-        y=ymax*i/5; py=sy(y)
-        parts.append(f"<line x1='{ml-5}' y1='{py:.1f}' x2='{ml}' y2='{py:.1f}' stroke='black'/>")
-        parts.append(f"<text x='{ml-8}' y='{py+4:.1f}' text-anchor='end' font-family='sans-serif' font-size='11'>{y:.1f}</text>")
-        if i>0:
-            parts.append(f"<line x1='{ml}' y1='{py:.1f}' x2='{width-mr}' y2='{py:.1f}' stroke='#ddd'/>")
-    parts.append(f"<text x='{width/2}' y='{height-25}' text-anchor='middle' font-family='sans-serif' font-size='13'>time (s)</text>")
-    parts.append(f"<text x='18' y='{height/2}' transform='rotate(-90 18 {height/2})' text-anchor='middle' font-family='sans-serif' font-size='13'>receiver bandwidth (Mbit/s)</text>")
-    for idx,(name,pts) in enumerate(label_series):
-        pts=sorted(pts)
-        color=colors[idx % len(colors)]
-        d=' '.join(f"{sx(x):.1f},{sy(y):.1f}" for x,y in pts)
-        parts.append(f"<polyline fill='none' stroke='{color}' stroke-width='2' points='{d}'/>")
-        for x,y in pts:
-            parts.append(f"<circle cx='{sx(x):.1f}' cy='{sy(y):.1f}' r='3' fill='{color}'/>")
-        ly=55 + idx*20
-        parts.append(f"<rect x='{width-220}' y='{ly-10}' width='14' height='3' fill='{color}'/>")
-        parts.append(f"<text x='{width-200}' y='{ly-5}' font-family='sans-serif' font-size='12'>{esc(name)}</text>")
-    parts.append('</svg>')
-    path.write_text('\n'.join(parts))
-
+    port=r.get('port','')
+    name='fair_STA' if port == fair_port else 'unfair_STA' if port == unfair_port else f"server_port_{port}"
+    series[(unfair, fair, name)].append((start_s(r['interval_s']), y))
+pairs=sorted(set((u,f) for u,f,_ in series))
 made=0
-for label in labels:
+for unfair, fair in pairs:
     label_series=[]
-    for (lbl,name),pts in sorted(series.items()):
-        if lbl==label and pts:
+    for (u,f,name),pts in sorted(series.items()):
+        if u==unfair and f==fair and pts:
             label_series.append((name, sorted(pts)))
-    if not label_series:
-        continue
-    safe=re.sub(r'[^A-Za-z0-9_.-]+','_',label)[:180]
-    if plt is not None:
+    if not label_series: continue
+    title=f"unfair {unfair} / fair {fair}"
+    path=outdir/f"unfair_{unfair}_fair_{fair}.png"
+    if plt is None:
+        path=path.with_suffix('.svg')
+        path.write_text(f"<svg xmlns='http://www.w3.org/2000/svg' width='800' height='120'><text x='20' y='60'>{title}: matplotlib unavailable</text></svg>\n")
+    else:
         plt.figure(figsize=(10,5))
         for name,pts in label_series:
             xs=[p[0] for p in pts]; ys=[p[1] for p in pts]
             plt.plot(xs, ys, marker='o', linewidth=1.4, label=name)
-        plt.title(label)
-        plt.xlabel('time (s)')
-        plt.ylabel('receiver bandwidth (Mbit/s)')
-        plt.grid(True, alpha=0.3)
-        plt.legend()
-        plt.tight_layout()
-        path=outdir/f'{safe}.png'
-        plt.savefig(path, dpi=140)
-        plt.close()
-    else:
-        path=outdir/f'{safe}.svg'
-        write_svg(path, label, label_series)
-    print(path)
-    made+=1
+        plt.title(title); plt.xlabel('time (s)'); plt.ylabel('receiver bandwidth (Mbit/s)')
+        plt.grid(True, alpha=0.3); plt.legend(); plt.tight_layout(); plt.savefig(path, dpi=140); plt.close()
+    print(path); made+=1
 print(f'Wrote {made} plots to {outdir}')
 PY
 }
 
+dry_run_results() {
+  local stamp out raw exp old_ap old_fair old_unfair old_fair_port old_unfair_port
+  stamp="$(ts)"
+  out="${1:-$LOCAL_RESULTS_DIR/collected_${stamp}_dryrun}"
+  exp="dryrun_${stamp}"
+  raw="$out/.raw_${stamp}"
+  old_ap="$AP_NODE"; old_fair="$FAIR_NODE"; old_unfair="$UNFAIR_NODE"
+  old_fair_port="$FAIR_PORT"; old_unfair_port="$UNFAIR_PORT"
+  AP_NODE="node900"; FAIR_NODE="node901"; UNFAIR_NODE="node902"
+  FAIR_PORT="5004"; UNFAIR_PORT="5003"
+  mkdir -p "$raw"
+  python3 - "$raw" "$exp" "$stamp" "$AP_NODE" "$FAIR_NODE" "$UNFAIR_NODE" "$FAIR_PORT" "$UNFAIR_PORT" <<'PY'
+import sys
+from pathlib import Path
+raw=Path(sys.argv[1]); exp=sys.argv[2]; stamp=sys.argv[3]
+ap, fair, unfair = sys.argv[4], sys.argv[5], sys.argv[6]
+fair_port, unfair_port = sys.argv[7], sys.argv[8]
+
+def rate_num(rate):
+    return float(rate.rstrip('Mm'))
+
+def iperf_lines(mbps, seconds=6, jitter=0.12, loss=0, total_base=100):
+    lines=[]
+    for i in range(seconds):
+        transfer=mbps/8.0
+        lost=loss if i == seconds-1 else 0
+        total=total_base*(i+1)
+        lines.append(f"[  3] {i}.0- {i+1}.0 sec  {transfer:.2f} MBytes  {mbps:.2f} Mbits/sec {jitter:.3f} ms {lost}/{total} ({(100*lost/total):.1f}%)")
+    lines.append(f"[  3] 0.0- {seconds}.0 sec  {mbps*seconds/8.0:.2f} MBytes  {mbps:.2f} Mbits/sec {jitter:.3f} ms {loss}/{total_base*seconds} ({(100*loss/(total_base*seconds)):.1f}%)")
+    return '\n'.join(lines) + '\n'
+
+def client_log(server_ip, port, rate, mbps, seconds=6):
+    return f"Sun Jun 28 00:00:00 UTC 2026\niperf -c {server_ip} -u -p {port} -b {rate} -t {seconds} -i 1\n" + iperf_lines(mbps, seconds, jitter=0.05)
+
+pairs=[('25M','5M'), ('25M','10M'), ('50M','10M')]
+for node in (ap, fair, unfair):
+    setup=raw/node/'setup'
+    setup.mkdir(parents=True, exist_ok=True)
+    (setup/f'{node}_dryrun_setup.log').write_text(f'dummy setup for {node}\n')
+for idx,(unfair_rate,fair_rate) in enumerate(pairs):
+    run_stamp=f"{stamp}_{idx+1:02d}"
+    label=f"unfair_{unfair_rate}_fair_{fair_rate}_{run_stamp}_proto_udp_fairlead_10s"
+    ap_dir=raw/ap/exp/label
+    fair_dir=raw/fair/exp/label
+    unfair_dir=raw/unfair/exp/label
+    for d in (ap_dir, fair_dir, unfair_dir):
+        d.mkdir(parents=True, exist_ok=True)
+    fair_rx=rate_num(fair_rate)*0.78
+    unfair_rx=rate_num(unfair_rate)*0.58
+    (ap_dir/f'{ap}_iperf_udp_server_p{fair_port}.log').write_text(iperf_lines(fair_rx, jitter=0.10+idx*0.01, loss=idx))
+    (ap_dir/f'{ap}_iperf_udp_server_p{unfair_port}.log').write_text(iperf_lines(unfair_rx, jitter=0.15+idx*0.01, loss=idx+1))
+    (fair_dir/f'{fair}_iperf_udp_client_fair_to_192.168.2.1_{fair_rate}_6s_p{fair_port}.log').write_text(client_log('192.168.2.1', fair_port, fair_rate, fair_rx))
+    (unfair_dir/f'{unfair}_iperf_udp_client_unfair_to_192.168.2.1_{unfair_rate}_6s_p{unfair_port}.log').write_text(client_log('192.168.2.1', unfair_port, unfair_rate, unfair_rx))
+print(f'Wrote dummy raw logs under {raw}')
+PY
+  organize_collected_results "$out" "$raw" "$stamp"
+  rm -rf "$raw"
+  local exp_dir="$out/$exp"
+  export_config "$exp_dir/experiment.conf"
+  parse_results "$exp_dir" "$exp_dir/summary.csv"
+  plot_results "$exp_dir" "$exp_dir/summary.csv" "$PLOTS_DIR/$exp"
+  echo "Dry-run results under: $exp_dir"
+  echo "Dry-run plots under: $PLOTS_DIR/$exp"
+  AP_NODE="$old_ap"; FAIR_NODE="$old_fair"; UNFAIR_NODE="$old_unfair"
+  FAIR_PORT="$old_fair_port"; UNFAIR_PORT="$old_unfair_port"
+}
 status_nodes() {
   local nodes="${1:-}" n
   if [[ -z "$nodes" ]]; then nodes="$(all_nodes_csv)" || return 1; fi
@@ -897,7 +1048,7 @@ setup_menu() {
       6) local nodes p; nodes=$(prompt_default "Nodes comma-separated" "$(all_nodes_csv_or_empty)"); p=$(prompt_default "Patch file" "$PATCH_FILE"); run_action "send patch + build/install" deploy_patch_and_build_nodes "$nodes" "$p"; pause;;
       7) local f; f=$(prompt_default "Config file to load" "$SCRIPT_DIR/experiment.conf"); load_config "$f"; pause;;
       8) local f; f=$(prompt_default "Config file to write" "$SCRIPT_DIR/experiment.conf"); export_config "$f"; pause;;
-      9) GATEWAY=$(prompt_default "Gateway" "$GATEWAY"); SLICE_NAME=$(prompt_default "Slice name" "$SLICE_NAME"); IMAGE=$(prompt_default "Image" "$IMAGE"); BACKPORTS_DIR=$(prompt_default "Backports dir on nodes" "$BACKPORTS_DIR"); NODE_LOG_DIR=$(prompt_default "Node log dir" "$NODE_LOG_DIR"); LOCAL_RESULTS_DIR=$(prompt_default "Local results dir" "$LOCAL_RESULTS_DIR"); SSID=$(prompt_default "SSID" "$SSID"); CHANNEL=$(prompt_default "Channel" "$CHANNEL"); SRC_REPO=$(prompt_default "Source repo" "$SRC_REPO"); BASE_REF=$(prompt_default "Base git ref" "$BASE_REF");;
+      9) GATEWAY=$(prompt_default "Gateway" "$GATEWAY"); SLICE_NAME=$(prompt_default "Slice name" "$SLICE_NAME"); IMAGE=$(prompt_default "Image" "$IMAGE"); BACKPORTS_DIR=$(prompt_default "Backports dir on nodes" "$BACKPORTS_DIR"); NODE_LOG_DIR=$(prompt_default "Node log dir" "$NODE_LOG_DIR"); LOCAL_RESULTS_DIR=$(prompt_default "Local results dir" "$LOCAL_RESULTS_DIR"); PLOTS_DIR=$(prompt_default "Plots dir" "$PLOTS_DIR"); SSID=$(prompt_default "SSID" "$SSID"); CHANNEL=$(prompt_default "Channel" "$CHANNEL"); SRC_REPO=$(prompt_default "Source repo" "$SRC_REPO"); BASE_REF=$(prompt_default "Base git ref" "$BASE_REF");;
       b|B) return 0;;
       *) echo "Unknown option"; sleep 1;;
     esac
@@ -998,13 +1149,15 @@ results_menu() {
     echo "2) parse results to CSV"
     echo "3) plot results"
     echo "4) parse + plot results"
+    echo "5) dry-run with dummy nodes/logs"
     echo "b) back"
     read -r -p "Select: " c
     case "$c" in
       1) local out nodes; out=$(prompt_default "Local output dir" "$LOCAL_RESULTS_DIR/collected_$(ts)"); nodes=$(prompt_default "Nodes comma-separated" "$(all_nodes_csv_or_empty)"); run_action "fetch results" fetch_results "$out" "$nodes"; pause;;
-      2) local dir csv; dir=$(prompt_default "Collected log dir" "$LOCAL_RESULTS_DIR"); csv=$(prompt_default "CSV output" "$dir/iperf_summary.csv"); run_action "parse results" parse_results "$dir" "$csv"; pause;;
-      3) local dir csv out; dir=$(prompt_default "Collected log dir" "$LOCAL_RESULTS_DIR"); csv=$(prompt_default "CSV file" "$dir/iperf_summary.csv"); out=$(prompt_default "Plot output dir" "$dir/plots"); run_action "plot results" plot_results "$dir" "$csv" "$out"; pause;;
-      4) local dir csv out; dir=$(prompt_default "Collected log dir" "$LOCAL_RESULTS_DIR"); csv=$(prompt_default "CSV output" "$dir/iperf_summary.csv"); out=$(prompt_default "Plot output dir" "$dir/plots"); run_action "parse results" parse_results "$dir" "$csv"; run_action "plot results" plot_results "$dir" "$csv" "$out"; pause;;
+      2) local dir csv; dir=$(prompt_default "Experiment log dir" "$LOCAL_RESULTS_DIR"); csv=$(prompt_default "CSV output" "$dir/summary.csv"); run_action "parse results" parse_results "$dir" "$csv"; pause;;
+      3) local dir csv out; dir=$(prompt_default "Experiment log dir" "$LOCAL_RESULTS_DIR"); csv=$(prompt_default "CSV file" "$dir/summary.csv"); out=$(prompt_default "Plot output dir" "$PLOTS_DIR/$(basename "$dir")"); run_action "plot results" plot_results "$dir" "$csv" "$out"; pause;;
+      4) local dir csv out; dir=$(prompt_default "Experiment log dir" "$LOCAL_RESULTS_DIR"); csv=$(prompt_default "CSV output" "$dir/summary.csv"); out=$(prompt_default "Plot output dir" "$PLOTS_DIR/$(basename "$dir")"); run_action "parse results" parse_results "$dir" "$csv"; run_action "plot results" plot_results "$dir" "$csv" "$out"; pause;;
+      5) local out; out=$(prompt_default "Dry-run collected output dir" "$LOCAL_RESULTS_DIR/collected_$(ts)_dryrun"); run_action "dry-run dummy results" dry_run_results "$out"; pause;;
       b|B) return 0;;
       *) echo "Unknown option"; sleep 1;;
     esac
@@ -1047,8 +1200,9 @@ Usage:
   ./run.sh export-config file
   ./run.sh deploy-driver [nodes_csv] [patch_file]
   ./run.sh fetch-results [out_dir] [nodes_csv]
-  ./run.sh parse-results log_dir [csv]
-  ./run.sh plot-results log_dir [csv] [plot_dir]
+  ./run.sh parse-results experiment_dir [csv]
+  ./run.sh plot-results experiment_dir [csv] [plot_dir]
+  ./run.sh dry-run [out_dir]
   ./run.sh status [nodes_csv]
 
 The interactive menu has tabs:
@@ -1067,8 +1221,9 @@ case "$cmd" in
   export-config) export_config "${1:?config file required}";;
   deploy-driver) deploy_patch_and_build_nodes "${1:-}" "${2:-$PATCH_FILE}";;
   fetch-results) fetch_results "${1:-$LOCAL_RESULTS_DIR/collected_$(ts)}" "${2:-}";;
-  parse-results) parse_results "${1:?log dir required}" "${2:-${1:?}/iperf_summary.csv}";;
-  plot-results) plot_results "${1:?log dir required}" "${2:-${1:?}/iperf_summary.csv}" "${3:-${1:?}/plots}";;
+  parse-results) parse_results "${1:?experiment dir required}" "${2:-${1:?}/summary.csv}";;
+  plot-results) plot_results "${1:?experiment dir required}" "${2:-${1:?}/summary.csv}" "${3:-$PLOTS_DIR/$(basename "${1:?}")}";;
+  dry-run|dryrun) dry_run_results "${1:-$LOCAL_RESULTS_DIR/collected_$(ts)_dryrun}";;
   status) status_nodes "${1:-}";;
   -h|--help|help) usage;;
   *) echo "Unknown command: $cmd" >&2; usage; exit 1;;
