@@ -25,13 +25,15 @@ The implementation is intended for authorized lab experimentation only. It demon
 
 ## Repository contents
 
+The final report and presentation PDFs are collected under [`docs/reports/`](docs/reports/) and [`docs/presentations/`](docs/presentations/).
+
 | Path | Description |
 | --- | --- |
 | [`backports-5.4.56-1/`](backports-5.4.56-1/) | Linux backports 5.4.56-1 source tree with the ath9k changes applied. |
 | [`patches/ath9k-jammer.patch`](patches/ath9k-jammer.patch) | Portable patch containing the ath9k changes against the backports source tree. |
 | [`scripts/ece436-run.sh`](scripts/ece436-run.sh) | Main interactive/non-interactive experiment runner for NITLab deployment and result analysis. |
 | [`run.sh`](run.sh) | Root-level compatibility wrapper that launches `scripts/ece436-run.sh`. |
-| [`docs/wifi-jammer-ath9k-final-presentation.pdf`](docs/wifi-jammer-ath9k-final-presentation.pdf) | Final presentation describing the objective, implementation, experiment topologies, and results. |
+| [`docs/presentations/wifi-jammer-ath9k-final-presentation.pdf`](docs/presentations/wifi-jammer-ath9k-final-presentation.pdf) | Final presentation describing the objective, implementation, experiment topologies, and results. |
 | [`docs/images/`](docs/images/) | README diagrams and selected throughput plots from the final experiments. |
 
 ## Driver modifications
