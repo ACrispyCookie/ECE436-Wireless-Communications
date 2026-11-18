@@ -2,7 +2,8 @@
 
 ![C](https://img.shields.io/badge/C-0E7C86?style=flat&logo=c&logoColor=white)
 ![Bash](https://img.shields.io/badge/Bash-0E7C86?style=flat&logo=gnubash&logoColor=white)
-![ath9k](https://img.shields.io/badge/ath9k-8A6D2B?style=flat&logo=linux&logoColor=white)
+![Linux kernel](https://img.shields.io/badge/Linux%20kernel-8A6D2B?style=flat&logo=linux&logoColor=white)
+![ath9k](https://img.shields.io/badge/ath9k-8A6D2B?style=flat&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTIiIHI9IjMiLz48cGF0aCBkPSJNMTIgMnYzTTEyIDE5djNNMiAxMmgzTTE5IDEyaDNNNC45IDQuOWwyLjEgMi4xTTE3IDE3bDIuMSAyLjFNNC45IDE5LjFMNyAxN00xNyA3bDIuMS0yLjEiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI2LjUiLz48L3N2Zz4=)
 ![802.11](https://img.shields.io/badge/802.11-2E7D5B?style=flat&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0yIDlhMTUgMTUgMCAwIDEgMjAgME01LjUgMTIuNWExMCAxMCAwIDAgMSAxMyAwTTkgMTZhNSA1IDAgMCAxIDYgMCIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTkuNSIgcj0iMS4yIiBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSJub25lIi8+PC9zdmc+)
 
 Course project for **ECE436 — Wireless Communications** at the **University of Thessaly**, focused on medium-access unfairness in IEEE 802.11 networks. The project modifies the Linux backports **ath9k** driver so a station can be configured with aggressive MAC-layer behavior, then automates NITLab experiments that compare fair and unfair Wi-Fi stations under controlled topologies.
