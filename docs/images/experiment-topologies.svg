@@ -1,162 +1,103 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1900" viewBox="0 0 1500 1900" role="img" aria-labelledby="title desc">
-  <title id="title">ECE436 WiFi jammer experiment topologies</title>
-  <desc id="desc">Five ECE436 ath9k WiFi jammer experiment stages with separated labels, nodes, and traffic paths.</desc>
-  <defs>
-    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
-      <stop stop-color="#06111f"/>
-      <stop offset="1" stop-color="#10203a"/>
-    </linearGradient>
-    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000" flood-opacity="0.25"/>
-    </filter>
-    <style>
-      .title{font:700 48px Inter,Segoe UI,sans-serif;fill:#e0f2fe}
-      .sub{font:500 23px Inter,Segoe UI,sans-serif;fill:#bae6fd}
-      .card{rx:28;fill:#0f172a;stroke:#334155;stroke-width:2.5;filter:url(#shadow)}
-      .head{font:700 30px Inter,Segoe UI,sans-serif;fill:#f8fafc}
-      .txt{font:500 22px Inter,Segoe UI,sans-serif;fill:#cbd5e1}
-      .small{font:500 19px Inter,Segoe UI,sans-serif;fill:#aebed0}
-      .note{font:700 19px Inter,Segoe UI,sans-serif;fill:#93c5fd}
-      .legend{rx:18;fill:#111827;stroke:#475569;stroke-width:1.5}
-      .ap{fill:#173322;stroke:#86efac;stroke-width:3}
-      .fair{fill:#102033;stroke:#67e8f9;stroke-width:3}
-      .jam{fill:#3b1d2a;stroke:#fb7185;stroke-width:3}
-      .label{font:800 17px Inter,Segoe UI,sans-serif;fill:#f8fafc}
-      .sublabel{font:700 13px Inter,Segoe UI,sans-serif;fill:#e2e8f0}
-      .normal{stroke:#38bdf8;stroke-width:5;fill:none;stroke-linecap:round}
-      .attack{stroke:#fb7185;stroke-width:5;stroke-dasharray:12 10;fill:none;stroke-linecap:round}
-      .thin{stroke:#60a5fa;stroke-width:3;fill:none;opacity:.25;stroke-linecap:round}
-      .divider{stroke:#334155;stroke-width:2;opacity:.75}
-    </style>
-  </defs>
-
-  <rect width="1500" height="1900" fill="url(#bg)"/>
-  <path d="M0 1745 C230 1670 430 1825 730 1750 C980 1690 1200 1765 1500 1688 L1500 1900 L0 1900 Z" fill="#0f766e" opacity="0.16"/>
-
-  <text x="75" y="78" class="title">Experiment topologies</text>
-  <text x="78" y="120" class="sub">Baseline measurements, same-network contention, two-link interference, and follow-on jamming</text>
-
-  <!-- Legend: two rows so labels never collide -->
-  <g transform="translate(75,160)">
-    <rect width="1350" height="120" class="legend"/>
-    <circle cx="48" cy="38" r="20" class="ap"/><text x="84" y="46" class="txt">Access point</text>
-    <circle cx="340" cy="38" r="20" class="fair"/><text x="376" y="46" class="txt">Fair station</text>
-    <circle cx="625" cy="38" r="20" class="jam"/><text x="661" y="46" class="txt">Modified ath9k station</text>
-    <line x1="84" y1="88" x2="185" y2="88" class="normal"/><text x="220" y="96" class="txt">normal traffic path</text>
-    <line x1="600" y1="88" x2="705" y2="88" class="attack"/><text x="740" y="96" class="txt">aggressive channel access / interference pressure</text>
-  </g>
-
-  <!-- Panel 1 -->
-  <g transform="translate(75,330)">
-    <rect width="1350" height="245" class="card"/>
-    <text x="36" y="54" class="head">1 · Fair baseline</text>
-    <text x="36" y="98" class="txt">One unmodified station connects to one AP.</text>
-    <text x="36" y="132" class="small">Reference throughput with normal carrier sense,</text>
-    <text x="36" y="160" class="small">AIFS/DIFS, and random backoff.</text>
-    <line x1="625" y1="38" x2="625" y2="207" class="divider"/>
-
-    <circle cx="910" cy="76" r="30" class="ap"/>
-    <text x="910" y="82" text-anchor="middle" class="label">AP</text>
-    <circle cx="910" cy="170" r="30" class="fair"/>
-    <text x="910" y="167" text-anchor="middle" class="label">STA1</text>
-    <text x="910" y="184" text-anchor="middle" class="sublabel">fair</text>
-    <line x1="910" y1="108" x2="910" y2="138" class="normal"/>
-    <text x="1015" y="130" class="note">reference link</text>
-  </g>
-
-  <!-- Panel 2 -->
-  <g transform="translate(75,620)">
-    <rect width="1350" height="245" class="card"/>
-    <text x="36" y="54" class="head">2 · Unfair baseline</text>
-    <text x="36" y="98" class="txt">The modified station is measured alone.</text>
-    <text x="36" y="132" class="small">Isolates the driver options before introducing</text>
-    <text x="36" y="160" class="small">a competing victim station.</text>
-    <line x1="625" y1="38" x2="625" y2="207" class="divider"/>
-
-    <circle cx="910" cy="76" r="30" class="ap"/>
-    <text x="910" y="82" text-anchor="middle" class="label">AP</text>
-    <circle cx="910" cy="170" r="30" class="jam"/>
-    <text x="910" y="167" text-anchor="middle" class="label">STA2</text>
-    <text x="910" y="184" text-anchor="middle" class="sublabel">ath9k</text>
-    <line x1="910" y1="108" x2="910" y2="138" class="attack"/>
-    <text x="1015" y="116" class="note">CW=0 · no backoff</text>
-    <text x="1015" y="144" class="note">forced idle · long TXOP</text>
-  </g>
-
-  <!-- Panel 3 -->
-  <g transform="translate(75,910)">
-    <rect width="1350" height="270" class="card"/>
-    <text x="36" y="54" class="head">3 · Same-AP jammer test</text>
-    <text x="36" y="98" class="txt">Fair and unfair stations contend through one AP.</text>
-    <text x="36" y="132" class="small">The modified ath9k station competes for the</text>
-    <text x="36" y="160" class="small">same medium and can starve the fair station.</text>
-    <line x1="625" y1="38" x2="625" y2="232" class="divider"/>
-
-    <circle cx="930" cy="78" r="30" class="ap"/>
-    <text x="930" y="84" text-anchor="middle" class="label">AP</text>
-    <circle cx="790" cy="192" r="30" class="fair"/>
-    <text x="790" y="189" text-anchor="middle" class="label">STA1</text>
-    <text x="790" y="206" text-anchor="middle" class="sublabel">fair</text>
-    <circle cx="1070" cy="192" r="30" class="jam"/>
-    <text x="1070" y="189" text-anchor="middle" class="label">STA2</text>
-    <text x="1070" y="206" text-anchor="middle" class="sublabel">ath9k</text>
-    <line x1="905" y1="99" x2="815" y2="171" class="normal"/>
-    <line x1="955" y1="99" x2="1045" y2="171" class="attack"/>
-    <text x="705" y="118" class="note">victim traffic</text>
-    <text x="1095" y="118" class="note">aggressive traffic</text>
-  </g>
-
-  <!-- Panel 4 -->
-  <g transform="translate(75,1225)">
-    <rect width="1350" height="285" class="card"/>
-    <text x="36" y="54" class="head">4 · Two-AP / unknown-link test</text>
-    <text x="36" y="98" class="txt">The unfair station uses a separate AP.</text>
-    <text x="36" y="132" class="small">Its aggressive access still creates pressure on</text>
-    <text x="36" y="160" class="small">a nearby fair AP/STA link on the same channel.</text>
-    <line x1="625" y1="38" x2="625" y2="247" class="divider"/>
-
-    <circle cx="790" cy="83" r="28" class="ap"/>
-    <text x="790" y="89" text-anchor="middle" class="label">AP1</text>
-    <circle cx="790" cy="188" r="28" class="fair"/>
-    <text x="790" y="185" text-anchor="middle" class="label">STA1</text>
-    <text x="790" y="202" text-anchor="middle" class="sublabel">fair</text>
-    <line x1="790" y1="113" x2="790" y2="158" class="normal"/>
-
-    <circle cx="1130" cy="83" r="28" class="ap"/>
-    <text x="1130" y="89" text-anchor="middle" class="label">AP2</text>
-    <circle cx="1130" cy="188" r="28" class="jam"/>
-    <text x="1130" y="185" text-anchor="middle" class="label">STA2</text>
-    <text x="1130" y="202" text-anchor="middle" class="sublabel">ath9k</text>
-    <line x1="1130" y1="113" x2="1130" y2="158" class="attack"/>
-
-    <path d="M1100 212 C1000 250 910 250 820 212" class="attack"/>
-    <text x="860" y="264" class="note">same-channel interference pressure</text>
-  </g>
-
-  <!-- Panel 5 -->
-  <g transform="translate(75,1555)">
-    <rect width="1350" height="285" class="card"/>
-    <text x="36" y="54" class="head">5 · Follow-on jammer with CSA</text>
-    <text x="36" y="98" class="txt">The victim AP announces a channel switch.</text>
-    <text x="36" y="132" class="small">The attacker observes the move, follows the</text>
-    <text x="36" y="160" class="small">new channel, and resumes aggressive access.</text>
-    <line x1="625" y1="38" x2="625" y2="247" class="divider"/>
-
-    <circle cx="790" cy="88" r="28" class="ap"/>
-    <text x="790" y="94" text-anchor="middle" class="label">AP1</text>
-    <circle cx="790" cy="198" r="28" class="fair"/>
-    <text x="790" y="195" text-anchor="middle" class="label">STA1</text>
-    <line x1="790" y1="118" x2="790" y2="168" class="normal"/>
-
-    <circle cx="1130" cy="88" r="28" class="ap"/>
-    <text x="1130" y="94" text-anchor="middle" class="label">AP2</text>
-    <circle cx="1130" cy="198" r="28" class="jam"/>
-    <text x="1130" y="195" text-anchor="middle" class="label">STA2</text>
-    <line x1="1130" y1="118" x2="1130" y2="168" class="attack"/>
-
-    <path d="M825 82 C910 48 1015 48 1095 82" class="thin"/>
-    <text x="895" y="42" class="note">CSA observed</text>
-    <path d="M1100 220 C1005 260 915 260 820 220" class="attack"/>
-    <text x="875" y="274" class="note">attacker follows new channel</text>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="1154" viewBox="0 0 960 1154" font-family="'Hanken Grotesk', system-ui, Arial, sans-serif"><style>@font-face{font-family:'Bricolage Grotesque';font-weight:700;src:url(data:font/woff2;base64,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) format('woff2')}@font-face{font-family:'Hanken Grotesk';font-weight:400;src:url(data:font/woff2;base64,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) format('woff2')}@font-face{font-family:'Hanken Grotesk';font-weight:600;src:url(data:font/woff2;base64,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) format('woff2')}</style>
+<defs><marker id="ah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#3b7a82"/></marker></defs>
+<rect width="960" height="1154" rx="24" fill="#0b1d21"/>
+<text x="40" y="66" font-size="30" font-weight="700" font-family="'Bricolage Grotesque', system-ui, Arial, sans-serif" letter-spacing="-0.3" fill="#eaf2f1">Experiment topologies</text>
+<text x="40" y="94" font-size="17" fill="#9db6b8">Baseline measurements, same-network contention, two-link interference, and follow-on jamming.</text>
+<rect x="40" y="130" width="26" height="20" rx="10.0" fill="#28525a"/>
+<text x="76" y="145" font-size="16" fill="#c9d9d9">Access point</text>
+<rect x="196.711" y="130" width="26" height="20" rx="10.0" fill="#1e5c64"/>
+<text x="232.711" y="145" font-size="16" fill="#c9d9d9">Fair station</text>
+<rect x="341.852" y="130" width="26" height="20" rx="10.0" fill="#515541"/>
+<text x="377.852" y="145" font-size="16" fill="#c9d9d9">Modified ath9k station</text>
+<path d="M563.5 140 h34" fill="none" stroke="#41e2f2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="607.5" y="145" font-size="16" fill="#c9d9d9">normal traffic</text>
+<path d="M729.969 140 h34" fill="none" stroke="#d8b46a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 6"/>
+<text x="773.969" y="145" font-size="16" fill="#c9d9d9">aggressive access</text>
+<rect x="40" y="178" width="880" height="150" rx="12" fill="#11282d"/>
+<text x="64" y="218" font-size="19" font-weight="700" fill="#eaf2f1">1 · Fair baseline</text>
+<text x="64" y="248" font-size="16" fill="#c9d9d9">One unmodified station connects to one AP.</text>
+<text x="64" y="272" font-size="16" fill="#c9d9d9">Reference throughput with normal carrier</text>
+<text x="64" y="296" font-size="16" fill="#c9d9d9">sense, AIFS/DIFS, and random backoff.</text>
+<line x1="420" y1="196" x2="420" y2="310" stroke="#183539" stroke-width="1.5"/>
+<path d="M550 253 L780 253" fill="none" stroke="#41e2f2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="665" y="213" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" text-anchor="middle" fill="#9db6b8">reference link</text>
+<rect x="450" y="223" width="100" height="60" rx="12" fill="#28525a"/>
+<text x="500" y="259" font-size="16" font-weight="700" text-anchor="middle" fill="#eaf2f1">AP</text>
+<rect x="780" y="223" width="100" height="60" rx="12" fill="#1e5c64"/>
+<text x="830" y="249" font-size="16" font-weight="700" text-anchor="middle" fill="#eaf2f1">STA1</text>
+<text x="830" y="271" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" text-anchor="middle" fill="#c9d9d9">fair</text>
+<rect x="40" y="342" width="880" height="150" rx="12" fill="#11282d"/>
+<text x="64" y="382" font-size="19" font-weight="700" fill="#eaf2f1">2 · Unfair baseline</text>
+<text x="64" y="412" font-size="16" fill="#c9d9d9">The modified station is measured alone.</text>
+<text x="64" y="436" font-size="16" fill="#c9d9d9">Isolates the driver options before introducing a</text>
+<text x="64" y="460" font-size="16" fill="#c9d9d9">competing victim station.</text>
+<line x1="420" y1="360" x2="420" y2="474" stroke="#183539" stroke-width="1.5"/>
+<path d="M550 417 L780 417" fill="none" stroke="#d8b46a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 6"/>
+<text x="665" y="377" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" text-anchor="middle" fill="#9db6b8">CW=0 · no backoff</text>
+<text x="665" y="471" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" text-anchor="middle" fill="#9db6b8">forced idle · long TXOP</text>
+<rect x="450" y="387" width="100" height="60" rx="12" fill="#28525a"/>
+<text x="500" y="423" font-size="16" font-weight="700" text-anchor="middle" fill="#eaf2f1">AP</text>
+<rect x="780" y="387" width="100" height="60" rx="12" fill="#515541"/>
+<text x="830" y="413" font-size="16" font-weight="700" text-anchor="middle" fill="#eaf2f1">STA2</text>
+<text x="830" y="435" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" text-anchor="middle" fill="#c9d9d9">ath9k</text>
+<rect x="40" y="506" width="880" height="160" rx="12" fill="#11282d"/>
+<text x="64" y="546" font-size="19" font-weight="700" fill="#eaf2f1">3 · Same-AP jammer test</text>
+<text x="64" y="576" font-size="16" fill="#c9d9d9">Fair and unfair stations contend through one</text>
+<text x="64" y="600" font-size="16" fill="#c9d9d9">AP. The modified ath9k station competes for</text>
+<text x="64" y="624" font-size="16" fill="#c9d9d9">the same medium and can starve the fair</text>
+<text x="64" y="648" font-size="16" fill="#c9d9d9">station.</text>
+<line x1="420" y1="524" x2="420" y2="648" stroke="#183539" stroke-width="1.5"/>
+<path d="M550 586 L615 586" fill="none" stroke="#41e2f2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="582.5" y="546" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" text-anchor="middle" fill="#9db6b8">victim traffic</text>
+<path d="M715 586 L780 586" fill="none" stroke="#d8b46a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 6"/>
+<text x="747.5" y="640" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" text-anchor="middle" fill="#9db6b8">aggressive traffic</text>
+<rect x="450" y="556" width="100" height="60" rx="12" fill="#1e5c64"/>
+<text x="500" y="582" font-size="16" font-weight="700" text-anchor="middle" fill="#eaf2f1">STA1</text>
+<text x="500" y="604" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" text-anchor="middle" fill="#c9d9d9">fair</text>
+<rect x="615" y="556" width="100" height="60" rx="12" fill="#28525a"/>
+<text x="665" y="592" font-size="16" font-weight="700" text-anchor="middle" fill="#eaf2f1">AP</text>
+<rect x="780" y="556" width="100" height="60" rx="12" fill="#515541"/>
+<text x="830" y="582" font-size="16" font-weight="700" text-anchor="middle" fill="#eaf2f1">STA2</text>
+<text x="830" y="604" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" text-anchor="middle" fill="#c9d9d9">ath9k</text>
+<rect x="40" y="680" width="880" height="210" rx="12" fill="#11282d"/>
+<text x="64" y="720" font-size="19" font-weight="700" fill="#eaf2f1">4 · Two-AP / unknown-link test</text>
+<text x="64" y="750" font-size="16" fill="#c9d9d9">The unfair station uses a separate AP. Its</text>
+<text x="64" y="774" font-size="16" fill="#c9d9d9">aggressive access still creates pressure on a</text>
+<text x="64" y="798" font-size="16" fill="#c9d9d9">nearby fair AP/STA link on the same channel.</text>
+<line x1="420" y1="698" x2="420" y2="872" stroke="#183539" stroke-width="1.5"/>
+<path d="M550 732 L780 732" fill="none" stroke="#41e2f2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M550 838 L780 838" fill="none" stroke="#d8b46a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 6"/>
+<rect x="450" y="702" width="100" height="60" rx="12" fill="#28525a"/>
+<text x="500" y="738" font-size="16" font-weight="700" text-anchor="middle" fill="#eaf2f1">AP1</text>
+<rect x="780" y="702" width="100" height="60" rx="12" fill="#1e5c64"/>
+<text x="830" y="728" font-size="16" font-weight="700" text-anchor="middle" fill="#eaf2f1">STA1</text>
+<text x="830" y="750" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" text-anchor="middle" fill="#c9d9d9">fair</text>
+<rect x="450" y="808" width="100" height="60" rx="12" fill="#28525a"/>
+<text x="500" y="844" font-size="16" font-weight="700" text-anchor="middle" fill="#eaf2f1">AP2</text>
+<rect x="780" y="808" width="100" height="60" rx="12" fill="#515541"/>
+<text x="830" y="834" font-size="16" font-weight="700" text-anchor="middle" fill="#eaf2f1">STA2</text>
+<text x="830" y="856" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" text-anchor="middle" fill="#c9d9d9">ath9k</text>
+<path d="M740 826 L740 746" fill="none" stroke="#d8b46a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 5" marker-end="url(#ah)"/>
+<text x="726" y="779" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" text-anchor="end" fill="#9db6b8">same-channel</text>
+<text x="726" y="799" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" text-anchor="end" fill="#9db6b8">interference pressure</text>
+<rect x="40" y="904" width="880" height="210" rx="12" fill="#11282d"/>
+<text x="64" y="944" font-size="19" font-weight="700" fill="#eaf2f1">5 · Follow-on jammer with CSA</text>
+<text x="64" y="974" font-size="16" fill="#c9d9d9">The victim AP announces a channel switch.</text>
+<text x="64" y="998" font-size="16" fill="#c9d9d9">The attacker observes the move, follows the</text>
+<text x="64" y="1022" font-size="16" fill="#c9d9d9">new channel, and resumes aggressive access.</text>
+<line x1="420" y1="922" x2="420" y2="1096" stroke="#183539" stroke-width="1.5"/>
+<path d="M550 956 L780 956" fill="none" stroke="#41e2f2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M550 1062 L780 1062" fill="none" stroke="#d8b46a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 6"/>
+<rect x="450" y="926" width="100" height="60" rx="12" fill="#28525a"/>
+<text x="500" y="962" font-size="16" font-weight="700" text-anchor="middle" fill="#eaf2f1">AP1</text>
+<rect x="780" y="926" width="100" height="60" rx="12" fill="#1e5c64"/>
+<text x="830" y="962" font-size="16" font-weight="700" text-anchor="middle" fill="#eaf2f1">STA1</text>
+<rect x="450" y="1032" width="100" height="60" rx="12" fill="#28525a"/>
+<text x="500" y="1068" font-size="16" font-weight="700" text-anchor="middle" fill="#eaf2f1">AP2</text>
+<rect x="780" y="1032" width="100" height="60" rx="12" fill="#515541"/>
+<text x="830" y="1068" font-size="16" font-weight="700" text-anchor="middle" fill="#eaf2f1">STA2</text>
+<path d="M740 1050 L740 970" fill="none" stroke="#d8b46a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 5" marker-end="url(#ah)"/>
+<text x="726" y="1003" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" text-anchor="end" fill="#9db6b8">attacker follows</text>
+<text x="726" y="1023" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" text-anchor="end" fill="#9db6b8">new channel</text>
+<text x="665" y="942" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" text-anchor="middle" fill="#9db6b8">CSA observed</text>
 </svg>
